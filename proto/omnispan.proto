@@ -1,0 +1,58 @@
+syntax = "proto3";
+package omnispan;
+
+service Engine {
+    rpc SubmitGenerate(GenerateRequest) returns (GenerateReply);
+    rpc GetEngineStats(StatsRequest) returns (StatsReply);
+}
+
+service Worker {
+    rpc Generate(WorkerGenerateRequest) returns (WorkerGenerateReply);
+}
+
+message GenerateRequest {
+    string request_id = 1;
+    string tenant_id = 2;
+    string prompt = 3;
+    uint32 max_tokens = 4;
+}
+
+message GenerateReply {
+    string request_id = 1;
+    string tenant_id = 2;
+    string response_text = 3;
+    uint32 input_tokens = 4;
+    uint32 output_tokens = 5;
+    double worker_latency_ms = 6;
+    double end_to_end_latency_ms = 7;
+    string status = 8;
+    string error_message = 9;
+}
+
+message WorkerGenerateRequest {
+    string request_id = 1;
+    string tenant_id = 2;
+    string prompt = 3;
+    uint32 max_tokens = 4;
+    uint64 submitted_at_ms = 5;
+}
+
+message WorkerGenerateReply {
+    string request_id = 1;
+    string tenant_id = 2;
+    string response_text = 3;
+    uint32 input_tokens = 4;
+    uint32 output_tokens = 5;
+    double worker_latency_ms = 6;
+    string status = 7;
+    string error_message = 8;
+}
+
+message StatsRequest {}
+
+message StatsReply {
+    uint64 uptime_seconds = 1;
+    uint64 accepted_requests = 2;
+    uint64 queue_depth = 3;
+    string mode = 4;
+}

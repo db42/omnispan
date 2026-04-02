@@ -6,7 +6,8 @@ use tonic::{Request, Response, Status};
 
 use crate::omnispan::engine_server::Engine;
 use crate::omnispan::{
-    GenerateReply, GenerateRequest, StatsReply, StatsRequest, WorkerGenerateRequest,
+    GenerateReply, GenerateRequest, StatsReply, StatsRequest, WorkerGenerateReply,
+    WorkerGenerateRequest,
 };
 use crate::queue::QueuedRequest;
 use crate::worker_client::DirectWorkerClient;
@@ -83,7 +84,7 @@ impl Engine for EngineService {
 
                 Ok(Response::new(reply))
             }
-            "queued" => {
+            "queued" | "micro_batch" => {
                 let queue_tx = self
                     .queue_tx
                     .as_ref()
@@ -174,13 +175,21 @@ pub async fn execute_with_worker(
         })
         .await?;
 
+    Ok(build_generate_reply(worker_reply, received_at, scheduled_at))
+}
+
+pub fn build_generate_reply(
+    worker_reply: WorkerGenerateReply,
+    received_at: Instant,
+    scheduled_at: Instant,
+) -> GenerateReply {
     let queue_wait_ms = if scheduled_at > received_at {
         (scheduled_at - received_at).as_secs_f64() * 1000.0
     } else {
         0.0
     };
 
-    Ok(GenerateReply {
+    GenerateReply {
         request_id: worker_reply.request_id,
         tenant_id: worker_reply.tenant_id,
         response_text: worker_reply.response_text,
@@ -194,5 +203,5 @@ pub async fn execute_with_worker(
             worker_reply.status
         },
         error_message: worker_reply.error_message,
-    })
+    }
 }

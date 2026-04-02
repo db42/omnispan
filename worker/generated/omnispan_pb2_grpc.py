@@ -5,7 +5,7 @@ import warnings
 
 import omnispan_pb2 as omnispan__pb2
 
-GRPC_GENERATED_VERSION = '1.67.1'
+GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -18,7 +18,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + f' but the generated code in omnispan_pb2_grpc.py depends on'
+        + ' but the generated code in omnispan_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
@@ -154,12 +154,23 @@ class WorkerStub(object):
                 request_serializer=omnispan__pb2.WorkerGenerateRequest.SerializeToString,
                 response_deserializer=omnispan__pb2.WorkerGenerateReply.FromString,
                 _registered_method=True)
+        self.GenerateBatch = channel.unary_unary(
+                '/omnispan.Worker/GenerateBatch',
+                request_serializer=omnispan__pb2.WorkerBatchGenerateRequest.SerializeToString,
+                response_deserializer=omnispan__pb2.WorkerBatchGenerateReply.FromString,
+                _registered_method=True)
 
 
 class WorkerServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def Generate(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GenerateBatch(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -172,6 +183,11 @@ def add_WorkerServicer_to_server(servicer, server):
                     servicer.Generate,
                     request_deserializer=omnispan__pb2.WorkerGenerateRequest.FromString,
                     response_serializer=omnispan__pb2.WorkerGenerateReply.SerializeToString,
+            ),
+            'GenerateBatch': grpc.unary_unary_rpc_method_handler(
+                    servicer.GenerateBatch,
+                    request_deserializer=omnispan__pb2.WorkerBatchGenerateRequest.FromString,
+                    response_serializer=omnispan__pb2.WorkerBatchGenerateReply.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -201,6 +217,33 @@ class Worker(object):
             '/omnispan.Worker/Generate',
             omnispan__pb2.WorkerGenerateRequest.SerializeToString,
             omnispan__pb2.WorkerGenerateReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GenerateBatch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/omnispan.Worker/GenerateBatch',
+            omnispan__pb2.WorkerBatchGenerateRequest.SerializeToString,
+            omnispan__pb2.WorkerBatchGenerateReply.FromString,
             options,
             channel_credentials,
             insecure,

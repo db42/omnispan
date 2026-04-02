@@ -8,6 +8,7 @@ service Engine {
 
 service Worker {
     rpc Generate(WorkerGenerateRequest) returns (WorkerGenerateReply);
+    rpc GenerateBatch(WorkerBatchGenerateRequest) returns (WorkerBatchGenerateReply);
 }
 
 message GenerateRequest {
@@ -46,6 +47,15 @@ message WorkerGenerateReply {
     double worker_latency_ms = 6;
     string status = 7;
     string error_message = 8;
+}
+
+message WorkerBatchGenerateRequest {
+    repeated WorkerGenerateRequest requests = 1;
+}
+
+message WorkerBatchGenerateReply {
+    repeated WorkerGenerateReply responses = 1;
+    double batch_latency_ms = 2;
 }
 
 message StatsRequest {}

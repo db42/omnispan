@@ -54,6 +54,57 @@ class WorkerService(omnispan_pb2_grpc.WorkerServicer):
             error_message="",
         )
 
+    async def GenerateBatch(self, request, context):
+        if len(request.requests) == 0:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "requests must be non-empty")
+
+        payloads = []
+        for item in request.requests:
+            if not item.prompt.strip():
+                await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "prompt must be non-empty")
+            payloads.append(
+                {
+                    "request_id": item.request_id,
+                    "tenant_id": item.tenant_id,
+                    "prompt": item.prompt,
+                    "max_tokens": item.max_tokens,
+                }
+            )
+
+        try:
+            result = await asyncio.to_thread(self.runtime.generate_batch, payloads)
+        except Exception as error:  # noqa: BLE001
+            logging.exception("worker batch generate failed")
+            return omnispan_pb2.WorkerBatchGenerateReply(
+                responses=[
+                    omnispan_pb2.WorkerGenerateReply(
+                        request_id=item["request_id"],
+                        tenant_id=item["tenant_id"],
+                        status="error",
+                        error_message=str(error),
+                    )
+                    for item in payloads
+                ],
+                batch_latency_ms=0.0,
+            )
+
+        return omnispan_pb2.WorkerBatchGenerateReply(
+            responses=[
+                omnispan_pb2.WorkerGenerateReply(
+                    request_id=item["request_id"],
+                    tenant_id=item["tenant_id"],
+                    response_text=item["response_text"],
+                    input_tokens=item["input_tokens"],
+                    output_tokens=item["output_tokens"],
+                    worker_latency_ms=result["batch_latency_ms"],
+                    status="ok",
+                    error_message="",
+                )
+                for item in result["responses"]
+            ],
+            batch_latency_ms=result["batch_latency_ms"],
+        )
+
 
 async def serve() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

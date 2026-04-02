@@ -212,6 +212,12 @@ Expected behavior:
 - slightly worse per-request latency at low load
 - queue wait time becomes an intentional tradeoff
 
+Current status:
+
+- implemented as a first real batch path
+- the engine waits for a short batching window, drains pending requests up to a maximum batch size, and dispatches them through the worker batch RPC
+- worker-side `mlx_lm.batch_generate` has shown a meaningful throughput gain over serial execution in local measurement
+
 ## Why `micro_batch` Before True Continuous Batching
 
 True continuous batching is token-step scheduling across in-flight requests.

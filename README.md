@@ -12,14 +12,14 @@ Current state:
 
 ## Modes
 
-The current implementation supports direct and queued modes:
+The current implementation supports direct, queued, and micro-batch modes:
 
 - client -> Rust engine
 - engine -> Python worker over gRPC
 - worker -> MLX model runtime
 
 Queued mode adds explicit in-engine queue ownership but still executes one request at a time.
-Batching is not implemented yet.
+Micro-batch mode adds a short batching window and groups pending requests before dispatching them to the worker batch path.
 
 Important:
 
@@ -66,6 +66,13 @@ ENGINE_MODE=queued WORKER_ENDPOINT=http://127.0.0.1:50071 cargo run --bin omnisp
 
 Use queued mode for benchmarks and concurrent tests.
 
+Run micro-batch mode:
+
+```bash
+cd engine
+ENGINE_MODE=micro_batch WORKER_ENDPOINT=http://127.0.0.1:50071 BATCH_WINDOW_MS=20 MAX_BATCH_SIZE=4 cargo run --bin omnispan-engine
+```
+
 Submit a request with `grpcurl` from the repo root:
 
 ```bash
@@ -99,4 +106,6 @@ python -m grpc_tools.protoc \
 - The worker must run in a Python environment that has `mlx_lm` installed.
 - The engine auto-generates a request ID if the client omits one.
 - Concurrent direct mode has triggered Python worker segmentation faults in the current MLX runtime path.
+- `BATCH_WINDOW_MS` controls how long the engine waits to gather additional requests in `micro_batch` mode.
+- `MAX_BATCH_SIZE` controls how many pending requests are grouped into one worker batch.
 - Benchmark artifacts from the earlier FastAPI prototype are in `bench/`.

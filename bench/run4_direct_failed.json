@@ -1,0 +1,89 @@
+{
+  "target": "127.0.0.1:50061",
+  "mode": "direct",
+  "total_requests": 10,
+  "successful_requests": 0,
+  "failed_requests": 10,
+  "wall_clock_seconds": 0.43,
+  "requests_per_second": 0.0,
+  "tokens_per_second": 0.0,
+  "total_input_tokens": 0,
+  "total_output_tokens": 0,
+  "client_latency_ms": {
+    "p50": 0.0,
+    "p95": 0.0,
+    "p99": 0.0,
+    "mean": 0.0
+  },
+  "engine_latency_ms": {
+    "p50": 0.0,
+    "p95": 0.0,
+    "p99": 0.0,
+    "mean": 0.0
+  },
+  "worker_latency_ms": {
+    "p50": 0.0,
+    "p95": 0.0,
+    "p99": 0.0,
+    "mean": 0.0
+  },
+  "queue_wait_ms": {
+    "p50": 0.0,
+    "p95": 0.0,
+    "p99": 0.0,
+    "mean": 0.0
+  },
+  "failures": [
+    {
+      "status": "UNKNOWN",
+      "error": "transport error",
+      "tenant_id": "tenant-1"
+    },
+    {
+      "status": "UNKNOWN",
+      "error": "transport error",
+      "tenant_id": "tenant-2"
+    },
+    {
+      "status": "UNKNOWN",
+      "error": "transport error",
+      "tenant_id": "tenant-1"
+    },
+    {
+      "status": "UNKNOWN",
+      "error": "transport error",
+      "tenant_id": "tenant-1"
+    },
+    {
+      "status": "UNKNOWN",
+      "error": "transport error",
+      "tenant_id": "tenant-2"
+    },
+    {
+      "status": "UNKNOWN",
+      "error": "transport error",
+      "tenant_id": "tenant-1"
+    },
+    {
+      "status": "UNKNOWN",
+      "error": "transport error",
+      "tenant_id": "tenant-2"
+    },
+    {
+      "status": "UNKNOWN",
+      "error": "transport error",
+      "tenant_id": "tenant-2"
+    },
+    {
+      "status": "UNKNOWN",
+      "error": "transport error",
+      "tenant_id": "tenant-2"
+    },
+    {
+      "status": "UNKNOWN",
+      "error": "transport error",
+      "tenant_id": "tenant-1"
+    }
+  ],
+  "note": "Concurrent direct mode is currently treated as debug-only because the Python MLX worker has crashed under parallel access."
+}

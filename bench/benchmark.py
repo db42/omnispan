@@ -1,14 +1,27 @@
 import argparse
 import json
 import math
+import re
 import statistics
+import sys
 import time
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+import grpc
 
 
 DEFAULT_PROMPT = "Explain how a transformer attention mechanism works in 3 sentences."
+ROOT_DIR = Path(__file__).resolve().parents[1]
+GENERATED_DIR = ROOT_DIR / "worker" / "generated"
+if str(GENERATED_DIR) not in sys.path:
+    sys.path.insert(0, str(GENERATED_DIR))
+
+import omnispan_pb2  # noqa: E402
+import omnispan_pb2_grpc  # noqa: E402
+
+
+QUEUE_WAIT_RE = re.compile(r"queue_wait_ms=([0-9]+(?:\.[0-9]+)?)")
 
 
 def percentile(values: list[float], pct: float) -> float:
@@ -25,50 +38,55 @@ def percentile(values: list[float], pct: float) -> float:
     return values[lower] * (1 - weight) + values[upper] * weight
 
 
-def send_request(url: str, tenant_id: str, prompt: str, max_tokens: int, timeout: float) -> dict:
-    payload = {
-        "tenant_id": tenant_id,
-        "prompt": prompt,
-        "max_tokens": max_tokens,
-    }
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+def parse_queue_wait_ms(status: str) -> float:
+    match = QUEUE_WAIT_RE.search(status or "")
+    if not match:
+        return 0.0
+    return float(match.group(1))
 
+
+def send_request(target: str, tenant_id: str, prompt: str, max_tokens: int, timeout: float) -> dict:
     start = time.perf_counter()
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            response_body = response.read()
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            result = json.loads(response_body.decode("utf-8"))
-            return {
-                "ok": True,
-                "status_code": response.status,
-                "elapsed_ms": elapsed_ms,
-                "server_latency_ms": float(result.get("latency_ms", 0.0)),
-                "input_tokens": int(result.get("input_tokens", 0)),
-                "output_tokens": int(result.get("output_tokens", 0)),
-                "tenant_id": tenant_id,
-            }
-    except urllib.error.HTTPError as exc:
+        with grpc.insecure_channel(target) as channel:
+            stub = omnispan_pb2_grpc.EngineStub(channel)
+            response = stub.SubmitGenerate(
+                omnispan_pb2.GenerateRequest(
+                    tenant_id=tenant_id,
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                ),
+                timeout=timeout,
+            )
+
         elapsed_ms = (time.perf_counter() - start) * 1000
-        details = exc.read().decode("utf-8", errors="replace")
+        queue_wait_ms = parse_queue_wait_ms(response.status)
+        return {
+            "ok": response.error_message == "",
+            "status": response.status,
+            "elapsed_ms": elapsed_ms,
+            "worker_latency_ms": float(response.worker_latency_ms),
+            "end_to_end_latency_ms": float(response.end_to_end_latency_ms),
+            "queue_wait_ms": queue_wait_ms,
+            "input_tokens": int(response.input_tokens),
+            "output_tokens": int(response.output_tokens),
+            "tenant_id": tenant_id,
+            "error": response.error_message,
+        }
+    except grpc.RpcError as exc:
+        elapsed_ms = (time.perf_counter() - start) * 1000
         return {
             "ok": False,
-            "status_code": exc.code,
+            "status": exc.code().name if callable(exc.code) else None,
             "elapsed_ms": elapsed_ms,
-            "error": details,
+            "error": exc.details() if callable(exc.details) else str(exc),
             "tenant_id": tenant_id,
         }
     except Exception as exc:  # noqa: BLE001
         elapsed_ms = (time.perf_counter() - start) * 1000
         return {
             "ok": False,
-            "status_code": None,
+            "status": None,
             "elapsed_ms": elapsed_ms,
             "error": str(exc),
             "tenant_id": tenant_id,
@@ -77,12 +95,12 @@ def send_request(url: str, tenant_id: str, prompt: str, max_tokens: int, timeout
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run a concurrent benchmark against the /generate endpoint."
+        description="Run a concurrent benchmark against the gRPC engine."
     )
     parser.add_argument(
-        "--url",
-        default="http://127.0.0.1:8000/generate",
-        help="Full /generate endpoint URL.",
+        "--target",
+        default="127.0.0.1:50061",
+        help="gRPC target for the engine.",
     )
     parser.add_argument(
         "--requests",
@@ -124,21 +142,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=120.0,
         help="Per-request timeout in seconds.",
     )
+    parser.add_argument(
+        "--mode",
+        default="unknown",
+        help="Mode label to include in the output artifact.",
+    )
     return parser
 
 
-def summarize(results: list[dict], started_at: float, finished_at: float) -> dict:
+def summarize(results: list[dict], started_at: float, finished_at: float, mode: str, target: str) -> dict:
     total_elapsed_s = finished_at - started_at
     success_results = [result for result in results if result["ok"]]
     failure_results = [result for result in results if not result["ok"]]
 
     client_latencies = sorted(result["elapsed_ms"] for result in success_results)
-    server_latencies = sorted(result["server_latency_ms"] for result in success_results)
+    worker_latencies = sorted(result["worker_latency_ms"] for result in success_results)
+    engine_latencies = sorted(result["end_to_end_latency_ms"] for result in success_results)
+    queue_waits = sorted(result.get("queue_wait_ms", 0.0) for result in success_results)
     total_input_tokens = sum(result.get("input_tokens", 0) for result in success_results)
     total_output_tokens = sum(result.get("output_tokens", 0) for result in success_results)
     total_tokens = total_input_tokens + total_output_tokens
 
     return {
+        "target": target,
+        "mode": mode,
         "total_requests": len(results),
         "successful_requests": len(success_results),
         "failed_requests": len(failure_results),
@@ -153,15 +180,27 @@ def summarize(results: list[dict], started_at: float, finished_at: float) -> dic
             "p99": round(percentile(client_latencies, 0.99), 2),
             "mean": round(statistics.fmean(client_latencies), 2) if client_latencies else 0.0,
         },
-        "server_latency_ms": {
-            "p50": round(percentile(server_latencies, 0.50), 2),
-            "p95": round(percentile(server_latencies, 0.95), 2),
-            "p99": round(percentile(server_latencies, 0.99), 2),
-            "mean": round(statistics.fmean(server_latencies), 2) if server_latencies else 0.0,
+        "engine_latency_ms": {
+            "p50": round(percentile(engine_latencies, 0.50), 2),
+            "p95": round(percentile(engine_latencies, 0.95), 2),
+            "p99": round(percentile(engine_latencies, 0.99), 2),
+            "mean": round(statistics.fmean(engine_latencies), 2) if engine_latencies else 0.0,
+        },
+        "worker_latency_ms": {
+            "p50": round(percentile(worker_latencies, 0.50), 2),
+            "p95": round(percentile(worker_latencies, 0.95), 2),
+            "p99": round(percentile(worker_latencies, 0.99), 2),
+            "mean": round(statistics.fmean(worker_latencies), 2) if worker_latencies else 0.0,
+        },
+        "queue_wait_ms": {
+            "p50": round(percentile(queue_waits, 0.50), 2),
+            "p95": round(percentile(queue_waits, 0.95), 2),
+            "p99": round(percentile(queue_waits, 0.99), 2),
+            "mean": round(statistics.fmean(queue_waits), 2) if queue_waits else 0.0,
         },
         "failures": [
             {
-                "status_code": result["status_code"],
+                "status": result["status"],
                 "error": result.get("error", ""),
                 "tenant_id": result["tenant_id"],
             }
@@ -192,7 +231,7 @@ def main() -> None:
             futures.append(
                 executor.submit(
                     send_request,
-                    args.url,
+                    args.target,
                     tenant_id,
                     args.prompt,
                     args.max_tokens,
@@ -204,7 +243,7 @@ def main() -> None:
             results.append(future.result())
 
     finished_at = time.perf_counter()
-    summary = summarize(results, started_at, finished_at)
+    summary = summarize(results, started_at, finished_at, args.mode, args.target)
 
     print(json.dumps(summary, indent=2))
 

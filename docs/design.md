@@ -159,6 +159,12 @@ Expected behavior:
 - simplest control path
 - poor behavior under concurrency when many requests compete for one worker
 
+Current status:
+
+- debug-only
+- concurrent direct load has triggered native crashes in the Python MLX worker
+- keep this mode for single-request debugging, not for throughput comparisons
+
 ### 2. `queued`
 
 Behavior:
@@ -178,6 +184,11 @@ Expected behavior:
 - same or similar worker execution latency as `direct`
 - clearer queueing metrics
 - improved architectural clarity, not necessarily better raw latency
+
+Current status:
+
+- this is now the primary execution path for performance work
+- queued mode is the safe concurrency boundary for the current Python MLX worker
 
 ### 3. `micro_batch`
 

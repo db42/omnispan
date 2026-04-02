@@ -10,15 +10,22 @@ Current state:
 - `bench/`: benchmark scripts and artifacts
 - `docs/`: design and planning notes
 
-## Direct Mode
+## Modes
 
-The current implementation supports direct mode only:
+The current implementation supports direct and queued modes:
 
 - client -> Rust engine
 - engine -> Python worker over gRPC
 - worker -> MLX model runtime
 
-No queueing or batching is implemented yet.
+Queued mode adds explicit in-engine queue ownership but still executes one request at a time.
+Batching is not implemented yet.
+
+Important:
+
+- Treat `direct` mode as debug-only.
+- Under concurrent direct load, the current Python MLX worker has crashed in native code.
+- Use `queued` mode for any meaningful load test or benchmark until worker-side parallel safety is proven.
 
 ## Prerequisites
 
@@ -47,6 +54,17 @@ Start the engine in a second terminal:
 cd engine
 ENGINE_MODE=direct WORKER_ENDPOINT=http://127.0.0.1:50071 cargo run --bin omnispan-engine
 ```
+
+Use direct mode only for single-request debugging.
+
+Run queued mode instead:
+
+```bash
+cd engine
+ENGINE_MODE=queued WORKER_ENDPOINT=http://127.0.0.1:50071 cargo run --bin omnispan-engine
+```
+
+Use queued mode for benchmarks and concurrent tests.
 
 Submit a request with `grpcurl` from the repo root:
 
@@ -80,4 +98,5 @@ python -m grpc_tools.protoc \
 
 - The worker must run in a Python environment that has `mlx_lm` installed.
 - The engine auto-generates a request ID if the client omits one.
+- Concurrent direct mode has triggered Python worker segmentation faults in the current MLX runtime path.
 - Benchmark artifacts from the earlier FastAPI prototype are in `bench/`.

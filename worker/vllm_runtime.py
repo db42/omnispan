@@ -14,6 +14,7 @@ class VllmWorkerRuntime(WorkerRuntime):
         trust_remote_code: bool = False,
         enforce_eager: bool = False,
         dtype: str | None = None,
+        quantization: str | None = None,
     ):
         super().__init__(model_id=model_id)
         self.tensor_parallel_size = tensor_parallel_size
@@ -22,6 +23,7 @@ class VllmWorkerRuntime(WorkerRuntime):
         self.trust_remote_code = trust_remote_code
         self.enforce_eager = enforce_eager
         self.dtype = dtype
+        self.quantization = quantization
         self.llm = None
         self.tokenizer = None
 
@@ -41,6 +43,8 @@ class VllmWorkerRuntime(WorkerRuntime):
             llm_kwargs["enforce_eager"] = True
         if self.dtype:
             llm_kwargs["dtype"] = self.dtype
+        if self.quantization:
+            llm_kwargs["quantization"] = self.quantization
 
         self.llm = LLM(**llm_kwargs)
         self.tokenizer = get_tokenizer(

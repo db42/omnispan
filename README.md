@@ -66,6 +66,7 @@ The worker now supports:
     - `VLLM_TRUST_REMOTE_CODE`
     - `VLLM_ENFORCE_EAGER`
     - `VLLM_DTYPE`
+    - `VLLM_QUANTIZATION`
 
 ## Run
 
@@ -81,6 +82,18 @@ Start a vLLM worker on Runpod/Linux:
 WORKER_BACKEND=vllm \
 MODEL_ID=Qwen/Qwen2.5-7B-Instruct \
 VLLM_GPU_MEMORY_UTILIZATION=0.9 \
+python worker/worker.py
+```
+
+Example for an AWQ model on a single NVIDIA GPU:
+
+```bash
+WORKER_BACKEND=vllm \
+MODEL_ID=Qwen/Qwen3-32B-AWQ \
+VLLM_QUANTIZATION=AWQ \
+VLLM_GPU_MEMORY_UTILIZATION=0.85 \
+VLLM_MAX_MODEL_LEN=4096 \
+VLLM_ENFORCE_EAGER=1 \
 python worker/worker.py
 ```
 

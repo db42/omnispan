@@ -62,6 +62,7 @@ def create_runtime(backend: str, model_id: str | None = None) -> WorkerRuntime:
             trust_remote_code=_env_flag("VLLM_TRUST_REMOTE_CODE", default=False),
             enforce_eager=_env_flag("VLLM_ENFORCE_EAGER", default=False),
             dtype=os.getenv("VLLM_DTYPE"),
+            quantization=os.getenv("VLLM_QUANTIZATION"),
         )
 
     raise ValueError(

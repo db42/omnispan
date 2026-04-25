@@ -14,4 +14,5 @@ tonic = "0.11"
 tonic-health = "0.11"
 
 [build-dependencies]
+protoc-bin-vendored = "3"
 tonic-build = "0.11"

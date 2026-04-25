@@ -1,17 +1,20 @@
-import time
+import os
+from abc import ABC, abstractmethod
 
 
-class MlxWorkerRuntime:
+DEFAULT_MLX_MODEL_ID = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+DEFAULT_VLLM_MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
+
+
+class WorkerRuntime(ABC):
     def __init__(self, model_id: str):
         self.model_id = model_id
-        self.model = None
-        self.tokenizer = None
 
+    @abstractmethod
     def load(self) -> None:
-        import mlx_lm
+        raise NotImplementedError
 
-        self.model, self.tokenizer = mlx_lm.load(self.model_id)
-
+    @abstractmethod
     def generate(
         self,
         request_id: str,
@@ -19,68 +22,48 @@ class MlxWorkerRuntime:
         prompt: str,
         max_tokens: int,
     ) -> dict:
-        if self.model is None or self.tokenizer is None:
-            raise RuntimeError("worker runtime is not loaded")
+        raise NotImplementedError
 
-        import mlx_lm
-
-        input_tokens = len(self.tokenizer.encode(prompt))
-
-        start = time.perf_counter()
-        response_text = mlx_lm.generate(
-            self.model,
-            self.tokenizer,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            verbose=False,
-        )
-        worker_latency_ms = (time.perf_counter() - start) * 1000
-        output_tokens = len(self.tokenizer.encode(response_text))
-
-        return {
-            "request_id": request_id,
-            "tenant_id": tenant_id,
-            "response_text": response_text,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "worker_latency_ms": round(worker_latency_ms, 2),
-        }
-
+    @abstractmethod
     def generate_batch(self, requests: list[dict]) -> dict:
-        if self.model is None or self.tokenizer is None:
-            raise RuntimeError("worker runtime is not loaded")
+        raise NotImplementedError
 
-        import mlx_lm
 
-        prompts = [request["prompt"] for request in requests]
-        prompt_token_ids = [self.tokenizer.encode(prompt) for prompt in prompts]
-        max_tokens = [request["max_tokens"] for request in requests]
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
-        start = time.perf_counter()
-        batch_response = mlx_lm.batch_generate(
-            self.model,
-            self.tokenizer,
-            prompts=prompt_token_ids,
-            max_tokens=max_tokens,
-            verbose=False,
+
+def _env_optional_int(name: str) -> int | None:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return None
+    return int(value)
+
+
+def create_runtime(backend: str, model_id: str | None = None) -> WorkerRuntime:
+    normalized_backend = backend.strip().lower()
+
+    if normalized_backend == "mlx":
+        from mlx_runtime import MlxWorkerRuntime
+
+        return MlxWorkerRuntime(model_id or DEFAULT_MLX_MODEL_ID)
+
+    if normalized_backend == "vllm":
+        from vllm_runtime import VllmWorkerRuntime
+
+        return VllmWorkerRuntime(
+            model_id=model_id or DEFAULT_VLLM_MODEL_ID,
+            tensor_parallel_size=int(os.getenv("VLLM_TENSOR_PARALLEL_SIZE", "1")),
+            gpu_memory_utilization=float(os.getenv("VLLM_GPU_MEMORY_UTILIZATION", "0.9")),
+            max_model_len=_env_optional_int("VLLM_MAX_MODEL_LEN"),
+            trust_remote_code=_env_flag("VLLM_TRUST_REMOTE_CODE", default=False),
+            enforce_eager=_env_flag("VLLM_ENFORCE_EAGER", default=False),
+            dtype=os.getenv("VLLM_DTYPE"),
         )
-        worker_latency_ms = (time.perf_counter() - start) * 1000
 
-        results = []
-        for request, response_text, prompt_tokens in zip(
-            requests, batch_response.texts, prompt_token_ids, strict=True
-        ):
-            results.append(
-                {
-                    "request_id": request["request_id"],
-                    "tenant_id": request["tenant_id"],
-                    "response_text": response_text,
-                    "input_tokens": len(prompt_tokens),
-                    "output_tokens": len(self.tokenizer.encode(response_text)),
-                }
-            )
-
-        return {
-            "responses": results,
-            "batch_latency_ms": round(worker_latency_ms, 2),
-        }
+    raise ValueError(
+        f"unsupported WORKER_BACKEND={backend!r}; expected one of: mlx, vllm"
+    )

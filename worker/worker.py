@@ -6,7 +6,7 @@ from pathlib import Path
 
 import grpc
 
-from worker_runtime import MlxWorkerRuntime
+from worker_runtime import create_runtime
 
 
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -19,7 +19,7 @@ import omnispan_pb2_grpc  # noqa: E402
 
 
 class WorkerService(omnispan_pb2_grpc.WorkerServicer):
-    def __init__(self, runtime: MlxWorkerRuntime):
+    def __init__(self, runtime):
         self.runtime = runtime
 
     async def Generate(self, request, context):
@@ -111,9 +111,10 @@ async def serve() -> None:
 
     host = os.getenv("WORKER_HOST", "127.0.0.1")
     port = os.getenv("WORKER_PORT", "50071")
-    model_id = os.getenv("MODEL_ID", "mlx-community/Qwen2.5-7B-Instruct-4bit")
+    backend = os.getenv("WORKER_BACKEND", "mlx").strip().lower()
+    model_id = os.getenv("MODEL_ID")
 
-    runtime = MlxWorkerRuntime(model_id=model_id)
+    runtime = create_runtime(backend=backend, model_id=model_id)
     runtime.load()
 
     server = grpc.aio.server()
@@ -121,7 +122,12 @@ async def serve() -> None:
     bind_address = f"{host}:{port}"
     server.add_insecure_port(bind_address)
 
-    logging.info("starting worker on %s with model %s", bind_address, model_id)
+    logging.info(
+        "starting worker on %s with backend %s and model %s",
+        bind_address,
+        backend,
+        runtime.model_id,
+    )
     await server.start()
     await server.wait_for_termination()
 

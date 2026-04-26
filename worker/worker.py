@@ -120,10 +120,15 @@ async def serve() -> None:
     server = grpc.aio.server()
     omnispan_pb2_grpc.add_WorkerServicer_to_server(WorkerService(runtime), server)
     bind_address = f"{host}:{port}"
-    server.add_insecure_port(bind_address)
+    bound_port = server.add_insecure_port(bind_address)
+    if bound_port == 0:
+        raise RuntimeError(
+            f"worker failed to bind {bind_address}; another process is likely already listening"
+        )
 
     logging.info(
-        "starting worker on %s with backend %s and model %s",
+        "starting worker pid=%s on %s with backend %s and model %s",
+        os.getpid(),
         bind_address,
         backend,
         runtime.model_id,

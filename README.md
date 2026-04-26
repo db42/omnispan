@@ -161,4 +161,5 @@ python -m grpc_tools.protoc \
 - `BATCH_WINDOW_MS` controls how long the engine waits to gather additional requests in `micro_batch` mode.
 - `MAX_BATCH_SIZE` controls how many pending requests are grouped into one worker batch.
 - The worker gRPC contract is unchanged across backends. The backend switch is entirely inside `worker/`.
+- Worker startup now fails loudly if `WORKER_HOST:WORKER_PORT` is already occupied, which helps catch stale worker processes instead of silently hitting the wrong instance.
 - Benchmark artifacts from the earlier FastAPI prototype are in `bench/`.

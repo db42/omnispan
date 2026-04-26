@@ -1,3 +1,4 @@
+import logging
 import time
 from typing import Any
 
@@ -14,6 +15,7 @@ class VllmWorkerRuntime(WorkerRuntime):
         trust_remote_code: bool = False,
         enforce_eager: bool = False,
         enable_prefix_caching: bool = False,
+        debug_batch_logging: bool = False,
         dtype: str | None = None,
         quantization: str | None = None,
     ):
@@ -24,6 +26,7 @@ class VllmWorkerRuntime(WorkerRuntime):
         self.trust_remote_code = trust_remote_code
         self.enforce_eager = enforce_eager
         self.enable_prefix_caching = enable_prefix_caching
+        self.debug_batch_logging = debug_batch_logging
         self.dtype = dtype
         self.quantization = quantization
         self.llm = None
@@ -78,13 +81,49 @@ class VllmWorkerRuntime(WorkerRuntime):
     def generate_batch(self, requests: list[dict]) -> dict:
         prompts = [request["prompt"] for request in requests]
         max_tokens = [request["max_tokens"] for request in requests]
+        request_ids = [request["request_id"] for request in requests]
+
+        if self.debug_batch_logging:
+            logging.info(
+                "vllm batch start request_ids=%s prompt_chars=%s max_tokens=%s",
+                request_ids,
+                [len(prompt) for prompt in prompts],
+                max_tokens,
+            )
 
         started_at = time.perf_counter()
         outputs = self._generate_outputs(prompts, max_tokens)
         batch_latency_ms = (time.perf_counter() - started_at) * 1000
 
+        if self.debug_batch_logging:
+            logging.info(
+                "vllm batch returned outputs=%s request_ids=%s batch_latency_ms=%.2f",
+                len(outputs),
+                request_ids,
+                batch_latency_ms,
+            )
+
+        if len(outputs) != len(requests):
+            logging.error(
+                "vllm batch output count mismatch request_count=%s output_count=%s request_ids=%s",
+                len(requests),
+                len(outputs),
+                request_ids,
+            )
+            raise RuntimeError(
+                f"vLLM batch output count mismatch: expected {len(requests)} got {len(outputs)}"
+            )
+
         results = []
         for request, output in zip(requests, outputs, strict=True):
+            completion_count = len(getattr(output, "outputs", []) or [])
+            if self.debug_batch_logging:
+                logging.info(
+                    "vllm batch item request_id=%s prompt_tokens=%s completion_count=%s",
+                    request["request_id"],
+                    self._prompt_token_count(output, request["prompt"]),
+                    completion_count,
+                )
             completion = self._first_completion(output)
             results.append(
                 {
@@ -115,7 +154,7 @@ class VllmWorkerRuntime(WorkerRuntime):
 
     def _first_completion(self, output: Any) -> Any:
         if not output.outputs:
-            raise RuntimeError("vLLM returned no completion output")
+            raise RuntimeError("vLLM returned no completion output for batch item")
         return output.outputs[0]
 
     def _prompt_token_count(self, output: Any, prompt: str) -> int:

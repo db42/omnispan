@@ -62,6 +62,7 @@ def create_runtime(backend: str, model_id: str | None = None) -> WorkerRuntime:
             trust_remote_code=_env_flag("VLLM_TRUST_REMOTE_CODE", default=False),
             enforce_eager=_env_flag("VLLM_ENFORCE_EAGER", default=False),
             enable_prefix_caching=_env_flag("VLLM_ENABLE_PREFIX_CACHING", default=False),
+            debug_batch_logging=_env_flag("WORKER_DEBUG_BATCH_LOGGING", default=False),
             dtype=os.getenv("VLLM_DTYPE"),
             quantization=os.getenv("VLLM_QUANTIZATION"),
         )

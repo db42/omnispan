@@ -12,6 +12,21 @@ import grpc
 
 
 DEFAULT_PROMPT = "Explain how a transformer attention mechanism works in 3 sentences."
+DEFAULT_APC_SHARED_BLOCK = (
+    "You are an enterprise research assistant serving risk and procurement teams. "
+    "Follow these rules exactly. "
+    "Always answer in concise bullet points. "
+    "Use factual language only. "
+    "Do not speculate beyond the provided policy frame. "
+    "Highlight operational, security, compliance, commercial, and dependency risks separately. "
+    "When evidence is weak, say that evidence is limited. "
+    "Do not include narrative introductions or conclusions. "
+    "Prefer short phrases over long sentences. "
+    "Preserve section order exactly as provided. "
+    "Use this schema for every answer: "
+    "Operational Risk, Security Risk, Compliance Risk, Commercial Risk, Dependency Risk. "
+    "If a category is not applicable, say not material. "
+)
 ROOT_DIR = Path(__file__).resolve().parents[1]
 GENERATED_DIR = ROOT_DIR / "worker" / "generated"
 if str(GENERATED_DIR) not in sys.path:
@@ -43,6 +58,20 @@ def parse_queue_wait_ms(status: str) -> float:
     if not match:
         return 0.0
     return float(match.group(1))
+
+
+def build_prompt(
+    base_prompt: str,
+    request_index: int,
+    shared_prefix_repeats: int,
+    suffix_template: str,
+) -> str:
+    if shared_prefix_repeats <= 0:
+        return base_prompt
+
+    shared_prefix = (DEFAULT_APC_SHARED_BLOCK + "\n") * shared_prefix_repeats
+    suffix = suffix_template.format(index=request_index + 1)
+    return f"{shared_prefix}\nQuestion: {suffix}"
 
 
 def send_request(target: str, tenant_id: str, prompt: str, max_tokens: int, timeout: float) -> dict:
@@ -129,6 +158,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--prompt",
         default=DEFAULT_PROMPT,
         help="Prompt to send to the model.",
+    )
+    parser.add_argument(
+        "--shared-prefix-repeats",
+        type=int,
+        default=0,
+        help=(
+            "Repeat a built-in enterprise policy block this many times before appending "
+            "a short varying suffix. Use this to create a prefix-cache-sensitive workload."
+        ),
+    )
+    parser.add_argument(
+        "--suffix-template",
+        default="Explain the top vendor risks for company {index} in 3 bullets.",
+        help=(
+            "Suffix appended after the shared prefix when --shared-prefix-repeats is used. "
+            "Use {index} to vary requests."
+        ),
     )
     parser.add_argument(
         "--max-tokens",
@@ -228,12 +274,18 @@ def main() -> None:
         for index in range(args.requests):
             tenant_index = index % args.tenant_count
             tenant_id = f"{args.tenant_prefix}-{tenant_index + 1}"
+            prompt = build_prompt(
+                base_prompt=args.prompt,
+                request_index=index,
+                shared_prefix_repeats=args.shared_prefix_repeats,
+                suffix_template=args.suffix_template,
+            )
             futures.append(
                 executor.submit(
                     send_request,
                     args.target,
                     tenant_id,
-                    args.prompt,
+                    prompt,
                     args.max_tokens,
                     args.timeout,
                 )

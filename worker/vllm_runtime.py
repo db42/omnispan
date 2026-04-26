@@ -13,6 +13,7 @@ class VllmWorkerRuntime(WorkerRuntime):
         max_model_len: int | None = None,
         trust_remote_code: bool = False,
         enforce_eager: bool = False,
+        enable_prefix_caching: bool = False,
         dtype: str | None = None,
         quantization: str | None = None,
     ):
@@ -22,6 +23,7 @@ class VllmWorkerRuntime(WorkerRuntime):
         self.max_model_len = max_model_len
         self.trust_remote_code = trust_remote_code
         self.enforce_eager = enforce_eager
+        self.enable_prefix_caching = enable_prefix_caching
         self.dtype = dtype
         self.quantization = quantization
         self.llm = None
@@ -36,6 +38,7 @@ class VllmWorkerRuntime(WorkerRuntime):
             "tensor_parallel_size": self.tensor_parallel_size,
             "gpu_memory_utilization": self.gpu_memory_utilization,
             "trust_remote_code": self.trust_remote_code,
+            "enable_prefix_caching": self.enable_prefix_caching,
         }
         if self.max_model_len is not None:
             llm_kwargs["max_model_len"] = self.max_model_len

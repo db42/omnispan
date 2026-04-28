@@ -8,3 +8,10 @@ pub fn env_u16(key: &str, default: u16) -> u16 {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(default)
 }
+
+pub fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default)
+}

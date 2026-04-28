@@ -80,7 +80,7 @@ impl Engine for EngineService {
                     started_at,
                     started_at,
                 )
-                .await?;
+                .await;
 
                 Ok(Response::new(reply))
             }
@@ -115,7 +115,7 @@ impl Engine for EngineService {
 
                 let reply = reply_rx
                     .await
-                    .map_err(|_| Status::unavailable("queue reply dropped"))??;
+                    .map_err(|_| Status::unavailable("queue reply dropped"))?;
 
                 Ok(Response::new(reply))
             }
@@ -164,18 +164,26 @@ pub async fn execute_with_worker(
     max_tokens: u32,
     received_at: Instant,
     scheduled_at: Instant,
-) -> Result<GenerateReply, Status> {
-    let worker_reply = worker_client
+) -> GenerateReply {
+    match worker_client
         .generate(WorkerGenerateRequest {
-            request_id,
-            tenant_id,
+            request_id: request_id.clone(),
+            tenant_id: tenant_id.clone(),
             prompt,
             max_tokens,
             submitted_at_ms: now_unix_ms(),
         })
-        .await?;
-
-    Ok(build_generate_reply(worker_reply, received_at, scheduled_at))
+        .await
+    {
+        Ok(worker_reply) => build_generate_reply(worker_reply, received_at, scheduled_at),
+        Err(error) => build_transport_error_reply(
+            request_id,
+            tenant_id,
+            error,
+            received_at,
+            scheduled_at,
+        ),
+    }
 }
 
 pub fn build_generate_reply(
@@ -189,6 +197,13 @@ pub fn build_generate_reply(
         0.0
     };
 
+    let is_ok = worker_reply.status == "ok" && worker_reply.error_message.is_empty();
+    let normalized_status = if is_ok {
+        "ok".to_string()
+    } else {
+        "worker_runtime_error".to_string()
+    };
+
     GenerateReply {
         request_id: worker_reply.request_id,
         tenant_id: worker_reply.tenant_id,
@@ -198,10 +213,52 @@ pub fn build_generate_reply(
         worker_latency_ms: worker_reply.worker_latency_ms,
         end_to_end_latency_ms: received_at.elapsed().as_secs_f64() * 1000.0,
         status: if queue_wait_ms > 0.0 {
-            format!("{} queue_wait_ms={queue_wait_ms:.2}", worker_reply.status)
+            format!("{normalized_status} queue_wait_ms={queue_wait_ms:.2}")
         } else {
-            worker_reply.status
+            normalized_status
         },
         error_message: worker_reply.error_message,
+    }
+}
+
+pub fn build_transport_error_reply(
+    request_id: String,
+    tenant_id: String,
+    error: Status,
+    received_at: Instant,
+    scheduled_at: Instant,
+) -> GenerateReply {
+    let queue_wait_ms = if scheduled_at > received_at {
+        (scheduled_at - received_at).as_secs_f64() * 1000.0
+    } else {
+        0.0
+    };
+    let status_prefix = classify_transport_error(&error);
+
+    GenerateReply {
+        request_id,
+        tenant_id,
+        response_text: String::new(),
+        input_tokens: 0,
+        output_tokens: 0,
+        worker_latency_ms: 0.0,
+        end_to_end_latency_ms: received_at.elapsed().as_secs_f64() * 1000.0,
+        status: if queue_wait_ms > 0.0 {
+            format!("{status_prefix} queue_wait_ms={queue_wait_ms:.2}")
+        } else {
+            status_prefix.to_string()
+        },
+        error_message: error.to_string(),
+    }
+}
+
+fn classify_transport_error(error: &Status) -> &'static str {
+    match error.code() {
+        tonic::Code::DeadlineExceeded => "worker_timeout",
+        tonic::Code::Unavailable => "worker_unavailable",
+        tonic::Code::Cancelled => "worker_cancelled",
+        tonic::Code::ResourceExhausted => "worker_resource_exhausted",
+        tonic::Code::Internal => "worker_internal_error",
+        _ => "worker_transport_error",
     }
 }

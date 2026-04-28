@@ -3,9 +3,9 @@ use std::time::Instant;
 
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::{sleep, Duration};
-use tonic::Status;
-
-use crate::engine::{build_generate_reply, execute_with_worker, EngineState};
+use crate::engine::{
+    build_generate_reply, build_transport_error_reply, execute_with_worker, EngineState,
+};
 use crate::omnispan::WorkerGenerateRequest;
 use crate::omnispan::GenerateReply;
 use crate::worker_client::DirectWorkerClient;
@@ -16,7 +16,7 @@ pub struct QueuedRequest {
     pub prompt: String,
     pub max_tokens: u32,
     pub received_at: Instant,
-    pub reply_tx: oneshot::Sender<Result<GenerateReply, Status>>,
+    pub reply_tx: oneshot::Sender<GenerateReply>,
 }
 
 #[derive(Clone, Copy)]
@@ -85,19 +85,30 @@ pub async fn run_scheduler_loop(
             Ok(batch_reply) => {
                 let mut responses = batch_reply.responses.into_iter();
                 for request in batch {
-                    let reply = responses.next().ok_or_else(|| {
-                        Status::internal("worker batch response length mismatch")
-                    });
-                    let result = reply.map(|worker_reply| {
-                        build_generate_reply(worker_reply, request.received_at, scheduled_at)
-                    });
-                    let _ = request.reply_tx.send(result);
+                    let reply = match responses.next() {
+                        Some(worker_reply) => {
+                            build_generate_reply(worker_reply, request.received_at, scheduled_at)
+                        }
+                        None => build_transport_error_reply(
+                            request.request_id,
+                            request.tenant_id,
+                            tonic::Status::internal("worker batch response length mismatch"),
+                            request.received_at,
+                            scheduled_at,
+                        ),
+                    };
+                    let _ = request.reply_tx.send(reply);
                 }
             }
             Err(error) => {
-                let message = error.to_string();
                 for request in batch {
-                    let _ = request.reply_tx.send(Err(Status::unavailable(message.clone())));
+                    let _ = request.reply_tx.send(build_transport_error_reply(
+                        request.request_id,
+                        request.tenant_id,
+                        error.clone(),
+                        request.received_at,
+                        scheduled_at,
+                    ));
                 }
             }
         }

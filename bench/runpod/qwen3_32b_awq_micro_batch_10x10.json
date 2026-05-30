@@ -1,0 +1,37 @@
+{
+  "target": "127.0.0.1:50061",
+  "mode": "micro_batch",
+  "total_requests": 10,
+  "successful_requests": 10,
+  "failed_requests": 0,
+  "wall_clock_seconds": 19.55,
+  "requests_per_second": 0.51,
+  "tokens_per_second": 83.36,
+  "total_input_tokens": 130,
+  "total_output_tokens": 1500,
+  "client_latency_ms": {
+    "p50": 13147.42,
+    "p95": 19547.84,
+    "p99": 19549.38,
+    "mean": 11802.24
+  },
+  "engine_latency_ms": {
+    "p50": 13124.99,
+    "p95": 19523.84,
+    "p99": 19524.04,
+    "mean": 11778.74
+  },
+  "worker_latency_ms": {
+    "p50": 6544.66,
+    "p95": 6551.13,
+    "p99": 6551.13,
+    "mean": 6515.37
+  },
+  "queue_wait_ms": {
+    "p50": 6570.6,
+    "p95": 13135.01,
+    "p99": 13135.21,
+    "mean": 5259.83
+  },
+  "failures": []
+}

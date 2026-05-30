@@ -1,0 +1,37 @@
+{
+  "target": "127.0.0.1:50061",
+  "mode": "apc_off",
+  "total_requests": 2,
+  "successful_requests": 2,
+  "failed_requests": 0,
+  "wall_clock_seconds": 4.21,
+  "requests_per_second": 0.47,
+  "tokens_per_second": 379.66,
+  "total_input_tokens": 1472,
+  "total_output_tokens": 128,
+  "client_latency_ms": {
+    "p50": 4212.21,
+    "p95": 4212.34,
+    "p99": 4212.35,
+    "mean": 4212.21
+  },
+  "engine_latency_ms": {
+    "p50": 4167.51,
+    "p95": 4167.6,
+    "p99": 4167.61,
+    "mean": 4167.51
+  },
+  "worker_latency_ms": {
+    "p50": 4149.71,
+    "p95": 4149.71,
+    "p99": 4149.71,
+    "mean": 4149.71
+  },
+  "queue_wait_ms": {
+    "p50": 11.28,
+    "p95": 11.37,
+    "p99": 11.38,
+    "mean": 11.28
+  },
+  "failures": []
+}

@@ -15,6 +15,17 @@ The first version is intentionally narrow:
 
 This is not a product build. It is a performance lab.
 
+## Status (current)
+
+Built beyond the original plan below:
+
+- **Backends:** MLX (Apple Silicon) and vLLM (Linux/GPU). vLLM adds continuous batching and optional prefix caching (APC).
+- **Streaming:** `SubmitGenerateStream` (server-streaming) in `direct`/`queued`; `micro_batch` returns `UNIMPLEMENTED`. MLX streams via `stream_generate`; vLLM via `AsyncLLMEngine` (`VLLM_ASYNC=1`, RunPod-pending validation).
+- **TTFT/TPOT:** worker/engine/client decomposition, reported only where valid — MLX on the streaming path only (unary and static batch return the whole response at once, so a first-token time isn't client-observable; judge those by throughput + latency). vLLM reports per-request TTFT/TPOT natively.
+- **SLO auto-tuner** (`bench/autotune.py`): sweeps engine configs, recommends the max-throughput config meeting a latency SLO, and refuses to pass a config on a metric it cannot measure.
+
+Key finding: on MLX, throughput (batching) and per-request streaming (TTFT) can't coexist without continuous batching — which is why vLLM/SGLang fold scheduling into the runtime.
+
 ## What We Want To Learn
 
 - How end-to-end latency decomposes into queue wait time and model execution time
@@ -32,7 +43,7 @@ This is not a product build. It is a performance lab.
 - No production auth system
 - No full tenant management UI
 - No speculative decoding yet
-- No prefix caching yet
+- No prefix-aware routing yet (vLLM's own APC is available; the engine does not route by prefix)
 
 Those can come later after the serving engine behavior is understood.
 
@@ -130,12 +141,12 @@ Response fields:
 - `status`
 - `error_message`
 
-Later extensions:
+Later extensions (now implemented, except where noted):
 
-- streaming token chunks
-- batched request execution
-- prefix-cache metadata
-- TTFT and decode timing split
+- streaming token chunks — `GenerateStream` (worker) / `SubmitGenerateStream` (engine)
+- batched request execution — `GenerateBatch`
+- TTFT and decode timing split — `ttft_ms` / `tpot_ms` fields
+- prefix-cache metadata — not yet (vLLM handles APC internally)
 
 ## Serving Modes
 
@@ -298,10 +309,10 @@ Aggregate:
 - batch size distribution
 - engine queue depth over time
 
-Future metrics:
+Implemented since (streaming path): TTFT and TPOT, each with worker / engine / client vantage points.
 
-- TTFT
-- decode tokens/sec
+Still future:
+
 - prefix cache hit rate
 - prefill tokens saved
 
@@ -416,3 +427,5 @@ For now:
 - keep milestone 1 synchronous and unary
 
 That keeps the design honest and minimizes fake sophistication.
+
+**Resolved since:** MLX's `batch_generate` is a usable batch primitive (micro-batch is real, ~1.6× throughput); transport is gRPC end-to-end; streaming was added after queueing was stable, as server-streaming on top of the unary contract rather than a milestone-1 feature.

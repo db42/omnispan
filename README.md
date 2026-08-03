@@ -483,23 +483,24 @@ have both without continuous batching.
 - **Engine overhead is negligible:** engine TTFT tracks worker TTFT within ~3 ms; the time is in the model and the queue, not the control plane.
 - TTFT/TPOT come from the streaming path; the unary and `micro_batch` paths are judged by throughput and total latency (table 1).
 
-### 3. Scheduling policy vs. continuous batching (vLLM, RunPod A40)
+### 3. Scheduling policy at a second offered load (vLLM, RunPod A40)
 *Model: `Qwen/Qwen3-32B-AWQ` | Concurrency: 8 | Requests: 8 | Max Tokens: 150 | streaming (`VLLM_ASYNC=1`). Artifacts: [`bench/runpod/qwen3_32b_awq_async_*_stream_8x8.json`](bench/runpod/).*
 
-Identical load and identical worker; **only the engine's scheduling policy differs.**
+The [headline A/B](#a-measured-result) run at 8 concurrent streams instead of 32,
+showing how the gate's cost scales with available concurrency — it can only cost
+what there is to admit. Adds wall clock and a direct queue-wait measurement.
 
-| Metric | `queued` (stream gate serializes) | `direct` (concurrency passes through) |
+| Metric | `queued` (N=1) | `direct` (N=∞, so ≤8 here) |
 |---|---|---|
 | Throughput | 32.9 tokens/s | **250.6 tokens/s** (7.6×) |
 | Wall clock | 39.6 s | **5.2 s** |
 | Worker TTFT (p50) | 47 ms | 133 ms |
-| **Client TTFT (p50)** | **17,369 ms** | **144 ms** (120× better) |
+| **Client TTFT (p50)** | **17,369 ms** | **144 ms** (120×) |
 | Queue wait (p50) | 17,309 ms | 0.05 ms |
 | TPOT (p50) | 32.9 ms | 33.9 ms |
 
-- **Serializing in front of a continuous batcher destroys it:** in `queued` the worker still answers in 47 ms, but 99.6% of client-observed latency is engine queue wait, because vLLM only ever sees one request at a time and has nothing to batch.
-- **TPOT barely moves (32.9 → 33.9 ms) while throughput grows 7.6×.** That is continuous batching working: vLLM interleaves 8 sequences through shared decode steps, so per-token latency is nearly unchanged while aggregate output multiplies.
-- **This is the exact inverse of MLX.** MLX segfaults on concurrent `direct` calls and *needs* the engine to serialize or batch; vLLM needs the engine to get out of the way. The right control-plane policy is a property of the runtime beneath it — which is the argument for folding scheduling into the inference engine (vLLM/SGLang) rather than layering it on top.
+Queue wait is 99.6% of client TTFT under the gate — measured directly, not
+inferred. At 32 concurrent the same comparison gives 26× and 230×.
 
 ### 4. Admission-limit sweep (vLLM, RunPod A40)
 *Model: `Qwen/Qwen3-32B-AWQ` | 32 requests at client concurrency 32 | Max Tokens: 150 | streaming. Sweeps `MAX_CONCURRENT_STREAMS`. Artifact: [`bench/runpod/qwen3_32b_awq_concurrency_sweep.json`](bench/runpod/qwen3_32b_awq_concurrency_sweep.json).*
@@ -525,32 +526,11 @@ A second sweep at higher offered load (512 requests, client concurrency 256) ext
 
 *N=32 appears in both sweeps at 859.9 and 860.2 tokens/s — an independent reproducibility check on the method.*
 
-**Two inflection points, on two different curves, at different N:**
+Two further observations beyond the [analysis above](#where-the-control-plane-stops-mattering)
+(saturation at N≈128, latency knee at N≈32–64, workload dependence):
 
-- **Throughput saturation: N≈128** (~1,260 tokens/s). Beyond it the engine's gate is a no-op — N=256 and unlimited are identical, because vLLM's own limits (KV cache, `max_num_seqs`) bind before ours does.
-- **Latency knee: N≈32–64.** TPOT is flat to N=32 (33 → 39 ms), then degrades sharply: 55 ms at 64, 104 ms at 128.
-
-Because those points differ, **throughput keeps improving after per-token latency has already begun to fall apart** — which is why the throughput-optimal and SLO-optimal settings disagree:
-
-| Objective | Best N | Result |
-|---|---|---|
-| Maximum throughput | 128 | 1,259 tokens/s, TPOT 104 ms |
-| TPOT SLO ≤ 50 ms (≈ reading speed) | **32** | 860 tokens/s (68% of peak), TPOT 39 ms |
-
-Which is correct depends on whether the tier is interactive or bulk.
-
-- **At this offered load no N met the 2 s TTFT p95 SLO** (all ≥17 s). When an SLO is unreachable at *every* admission setting, the answer is not tuning — it is more replicas. That is the autoscaling signal, and the point where a single-node control plane runs out of moves.
-- **Consequence for the control plane:** treat the admission limit as a *safety valve* (KV memory, tenant quotas, TPOT protection), not a throughput dial — and prefer driving it from measured KV-cache pressure (`gpu_cache_usage_perc`) rather than a static constant, since both inflection points move with workload shape. The opposite holds for MLX, where the gate is mandatory for safety.
-
-> **Workload dependence — read the numbers narrowly.** These sweeps use 13-token
-> prompts and 150-token outputs (11.5:1 output-to-input), uniform across requests:
-> a **decode-bound workload with negligible prefill**. That is why batching scaled
-> so cheaply — adding sequences to a memory-bandwidth-bound decode step is nearly
-> free until bandwidth or KV memory runs out. Long prompts would move saturation
-> much earlier (prefill is compute-bound and stalls decode for every sequence in
-> the batch); longer or mixed-length outputs would too, by consuming KV faster and
-> introducing stragglers. N≈128 characterizes *this* workload on *this* GPU, not
-> serving in general.
+- **No N met the 2 s TTFT p95 SLO at the higher load** (all ≥17 s). When an SLO is unreachable at *every* admission setting, the answer is not tuning — it is more replicas. That is the autoscaling signal, and the point where a single-node control plane runs out of moves.
+- **Treat the admission limit as a safety valve** (KV memory, tenant quotas, TPOT protection), not a throughput dial — and prefer driving it from measured KV-cache pressure (`gpu_cache_usage_perc`) rather than a static constant, since both inflection points move with workload shape. The opposite holds for MLX, where the gate is mandatory for safety.
 
 ### 5. RunPod A40 performance (vLLM, Automatic Prefix Caching)
 *Model: `Qwen/Qwen3-32B-AWQ` | Concurrency: 2 | Requests: 2 | Max Tokens: 64 | Prefix-cache workload (6× repeated policy prefix)*
@@ -570,8 +550,9 @@ Omnispan is a **single-node testbed**, and its claims are bounded accordingly:
 
 - One engine, one worker, one GPU/accelerator — no distributed scheduling, no multi-node parallelism.
 - Backends cover **NVIDIA (vLLM)** and **Apple Silicon (MLX)** only; no AMD/ROCm.
-- TTFT is measured on the streaming path; under batching it is derived/unmeasured as noted above.
-- Benchmark samples here are small-N and meant to show tradeoff *shape*, not publishable percentiles.
+- TTFT/TPOT are reported only where a client actually observes a token stream. On MLX that is the streaming path alone; the unary and static-batch paths leave them unmeasured rather than estimating them.
+- Sample sizes vary: GPU sweeps run 32–512 requests, local MLX runs 8–10. The small ones show tradeoff *shape*, not publishable percentiles.
+- All results are one workload — short prompts, 150-token outputs, uniform length. Prefill-heavy or mixed-length traffic would move the numbers, particularly the saturation point.
 
 Cluster-scale concerns (multi-scheduler K8s architectures, topology-aware
 placement, fractional GPU allocation, checkpoint/restore, workload isolation)
@@ -610,12 +591,7 @@ python -m grpc_tools.protoc \
 
 The Rust stubs regenerate automatically via `engine/build.rs` on `cargo build`.
 
-## Notes
+## Operational notes
 
-- The worker must run in a Python environment with the selected backend's dependencies installed.
 - The engine auto-generates a request ID if the client omits one.
-- Treat `direct` mode as debug-only; concurrent direct mode has triggered Python worker segmentation faults in the MLX runtime.
-- `BATCH_WINDOW_MS` controls how long the engine waits to gather requests in `micro_batch` mode; `MAX_BATCH_SIZE` caps how many are grouped into one worker batch.
-- The worker gRPC contract is unchanged across backends; the backend switch is entirely inside `worker/`.
-- Worker startup fails loudly if `WORKER_HOST:WORKER_PORT` is already occupied, which helps catch stale worker processes instead of silently hitting the wrong instance.
-- Benchmark artifacts are saved in [`bench/`](bench/) and [`bench/runpod/`](bench/runpod/).
+- Worker startup fails loudly if `WORKER_HOST:WORKER_PORT` is already occupied, which catches stale worker processes instead of silently hitting the wrong instance.

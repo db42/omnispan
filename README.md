@@ -569,7 +569,7 @@ Three next steps follow directly from the measurements above:
 
 - **Adaptive admission driven by KV-cache pressure** (`gpu_cache_usage_perc`) rather than a static limit. The sweep showed both inflection points move with workload shape, so a fixed N is the wrong control variable — the loop should close on the signal that actually predicts saturation.
 - **Priority classes in the streaming gate**, so interactive work preempts bulk. This is the smallest change that demonstrates the online/batch tension on real hardware, without a job store — see [`docs/batch-tier.md`](docs/batch-tier.md).
-- **Prefix-affinity routing**, once there is more than one worker: route requests sharing a prefix to the worker whose KV cache is already warm. Motivated by the 1.47× prefix-caching result below.
+- **Prefix-affinity routing**, once there is more than one worker: route requests sharing a prefix to the worker whose KV cache is already warm. Motivated by the 1.47× prefix-caching result above.
 
 Deliberately *not* on the list: implementing continuous batching in the engine.
 The central finding here is that it belongs where the KV cache lives, so the

@@ -25,27 +25,37 @@ engine, client) so queueing is visible separately from compute.
 
 ## A measured result
 
-On an A40, `Qwen/Qwen3-32B-AWQ`, 8 concurrent streams, identical worker, varying
-**only** the engine's concurrency gate:
+One A40, `Qwen/Qwen3-32B-AWQ`, 8 concurrent streams of a 13-token prompt with
+150-token outputs. Identical worker, identical load — varying **only** the
+engine's concurrency gate:
 
 | | `queued` (N=1) | `direct` (N=∞) |
 |---|---|---|
 | Throughput | 32.9 tokens/s | **250.6 tokens/s** |
-| Worker TTFT p50 | 47 ms | 133 ms |
 | Client TTFT p50 | 17,369 ms | **144 ms** |
+| Worker TTFT p50 | 47 ms | 133 ms |
 | TPOT p50 | 32.9 ms | 33.9 ms |
 
 The instructive part: **per-request and population TTFT move in opposite
-directions.** Restricting concurrency makes any *individual* prefill faster (the
-worker still answers in 47 ms) while making the *population* far slower — that
-47 ms sits behind a ~17 s queue, because the gate pins vLLM's batcher at batch
-size 1. Meanwhile TPOT barely moves (32.9 → 33.9 ms) while throughput grows
-7.6×, which is the signature of continuous batching: eight sequences share each
-decode step, so per-token latency is nearly unchanged.
+directions.** Restricting concurrency makes any *individual* prefill faster — the
+worker still answers in 47 ms, since that one sequence has the GPU to itself —
+while making the *population* far slower, because that 47 ms now sits behind a
+~17 s queue. The gate pins vLLM's batcher at batch size 1, so aggregate
+throughput collapses to a single sequence's decode rate. In `direct`, prefill
+competes with seven other sequences' decode steps and slows to 133 ms; every
+client still sees its first token ~120× sooner.
+
+Meanwhile TPOT barely moves (32.9 → 33.9 ms) while throughput grows 7.6×. That
+is the signature of continuous batching: eight sequences share each decode step,
+so per-token latency is nearly unchanged while aggregate output multiplies.
 
 The takeaway I keep: the right admission policy is a property of the runtime
 beneath, not a global default. (MLX *needs* the gate — concurrent native calls
 segfault; vLLM is punished by it.)
+
+*Small sample — 8 requests — but an independent 32-request sweep reproduced both
+cells to within 0.1% (32.86 and 250.63 tokens/s), and this A/B is the cleanest
+controlled comparison: same offered load, one variable.*
 
 ## Where the control plane stops mattering
 

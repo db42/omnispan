@@ -32,20 +32,19 @@ engine's admission limit:
 | | gate at N=1 | gate open (N=∞) |
 |---|---|---|
 | Throughput | 32.9 tokens/s | **859.9 tokens/s** (26×) |
-| Client TTFT p50 | 76,845 ms | **334 ms** (230×) |
-| — of which queue wait | 76,794 ms | 0.03 ms |
 | Worker TTFT p50 | 48 ms | 330 ms |
+| Client TTFT p50 | 76,845 ms | **334 ms** (230×) |
 | TPOT p50 | 33.0 ms | 38.2 ms |
-| Wall clock | 158.7 s | **6.1 s** |
 
 The instructive part: **per-request and population TTFT move in opposite
 directions.** Closing the gate makes any *individual* prefill faster — the worker
 answers in 48 ms, since that one sequence has the GPU to itself — while making
-the *population* catastrophically slower, because that 48 ms now sits behind a
-77-second queue. The gate pins vLLM's batcher at batch size 1, so aggregate
-throughput collapses to a single sequence's decode rate. Opening it lets prefill
-compete with 31 other sequences' decode steps (330 ms, ~7× slower per request),
-and every client still sees its first token 230× sooner.
+the *population* catastrophically slower: 76,794 ms of that client TTFT is queue
+wait. The gate pins vLLM's batcher at batch size 1, so aggregate throughput
+collapses to a single sequence's decode rate, and the run takes 159 s instead of
+6 s. Opening it lets prefill compete with 31 other sequences' decode steps
+(330 ms, ~7× slower per request), and every client still sees its first token
+230× sooner.
 
 Meanwhile TPOT moves only 33.0 → 38.2 ms while throughput grows 26×. That is the
 signature of continuous batching: sequences share each decode step, so per-token

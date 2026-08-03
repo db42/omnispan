@@ -4,34 +4,34 @@
   "total_requests": 10,
   "successful_requests": 10,
   "failed_requests": 0,
-  "wall_clock_seconds": 14.04,
-  "requests_per_second": 0.71,
-  "tokens_per_second": 116.06,
+  "wall_clock_seconds": 13.91,
+  "requests_per_second": 0.72,
+  "tokens_per_second": 117.22,
   "total_input_tokens": 130,
   "total_output_tokens": 1500,
   "client_latency_ms": {
-    "p50": 11066.49,
-    "p95": 14042.19,
-    "p99": 14042.21,
-    "mean": 9471.23
+    "p50": 10946.11,
+    "p95": 13903.81,
+    "p99": 13904.35,
+    "mean": 9357.37
   },
   "engine_latency_ms": {
-    "p50": 11062.63,
-    "p95": 14038.2,
-    "p99": 14038.2,
-    "mean": 9466.7
+    "p50": 10940.73,
+    "p95": 13898.23,
+    "p99": 13898.27,
+    "mean": 9351.35
   },
   "worker_latency_ms": {
-    "p50": 5450.58,
-    "p95": 5559.12,
-    "p99": 5559.12,
-    "mean": 4993.82
+    "p50": 5425.72,
+    "p95": 5462.2,
+    "p99": 5462.2,
+    "mean": 4941.66
   },
   "queue_wait_ms": {
-    "p50": 5606.76,
-    "p95": 11084.55,
-    "p99": 11084.55,
-    "mean": 4468.35
+    "p50": 5510.86,
+    "p95": 10962.53,
+    "p99": 10962.58,
+    "mean": 4405.51
   },
   "failures": []
 }

@@ -49,26 +49,43 @@ segfault; vLLM is punished by it.)
 
 ## Where the control plane stops mattering
 
-Sweeping the admission limit further shows the gate has a ceiling. Throughput
-saturates at **N≈128 (~1,260 tokens/s)**; beyond it, N=256 and unlimited are
-identical, because vLLM's KV cache and `max_num_seqs` bind before the engine's
-gate does.
+Sweeping the admission limit shows the gate has a ceiling — and that there are
+**two inflection points, at different N**:
 
-| N | 1 | 8 | 32 | 64 | **128** | 256 | ∞ |
+| N | 1 | 8 | 32 | 64 | 128 | 256 | ∞ |
 |---|---|---|---|---|---|---|---|
 | tokens/s | 32.9 | 250.6 | 860.2 | 1,170.4 | **1,258.6** | 1,260.2 | 1,266.4 |
-| TPOT p50 | 33.0 | 34.0 | 38.7 | 55.3 | **103.7** | 103.8 | 102.0 |
+| TPOT p50 (ms) | 33.0 | 34.0 | **38.7** | 55.3 | 103.7 | 103.8 | 102.0 |
 
-*Spliced from two sweeps at different offered loads (N≤16 at 32 requests, N≥32 at 512). N=32 ran in both and landed at 859.9 vs 860.2 tokens/s, which is the join's justification and a reproducibility check.*
+- **Throughput saturation at N≈128** (~1,260 tokens/s). Beyond it, N=256 and
+  unlimited are identical — vLLM's KV cache and `max_num_seqs` bind before the
+  engine's gate does, so the control plane has no further influence.
+- **Latency knee at N≈32–64.** TPOT is flat to 32 (33 → 39 ms), then degrades
+  sharply: 55 ms at 64, 104 ms at 128.
 
-The real tradeoff turned out to be TPOT, not throughput: the last 7.5% of
-throughput costs a 3× per-token latency regression. So the throughput-optimal N
-(128) and the SLO-optimal N (32, for a 50 ms TPOT target — roughly reading speed)
-are different numbers. And at this load *no* N met a 2 s TTFT p95 target, which
-is the signal to add replicas rather than keep tuning.
+Those are separate curves bending at separate points, which is the whole reason
+throughput-optimal and SLO-optimal disagree: **throughput keeps improving well
+after per-token latency has started falling apart.** Maximizing throughput picks
+N=128 (1,259 tokens/s, TPOT 104 ms). A 50 ms TPOT target — roughly reading speed
+— picks **N=32**: 68% of peak throughput at usable per-user latency. And at this
+load *no* N met a 2 s TTFT p95 target, which is the signal to add replicas rather
+than keep tuning.
 
-I expected a clean knee and initially didn't find one — the first sweep was
-capped by the benchmark client's own concurrency, not the GPU. Re-running at
+**The workload these numbers describe.** 13-token prompts, 150-token outputs
+(11.5:1 output-to-input), uniform length, Qwen3-32B-AWQ on one A40. That is a
+**decode-bound workload with negligible prefill**, which is exactly why batching
+scaled so cheaply — adding sequences to a memory-bandwidth-bound decode step is
+nearly free until bandwidth or KV memory runs out. Long prompts would shift
+saturation much earlier (prefill is compute-bound and stalls decode for
+everyone); longer or mixed-length outputs would too. **N≈128 is a property of
+this workload, not a transferable constant** — which is itself the argument that
+a static N is the wrong control variable, and the loop should close on measured
+KV pressure instead.
+
+*Table splices two sweeps at different offered loads (N≤16 at 32 requests, N≥32 at 512). N=32 ran in both at 859.9 vs 860.2 tokens/s — the join's justification and a reproducibility check.*
+
+I expected a single clean inflection and initially found none: the first sweep
+was capped by the benchmark client's own concurrency, not the GPU. Re-running at
 higher offered load produced the curve above.
 
 ## What's here
@@ -495,11 +512,32 @@ A second sweep at higher offered load (512 requests, client concurrency 256) ext
 
 *N=32 appears in both sweeps at 859.9 and 860.2 tokens/s — an independent reproducibility check on the method.*
 
-- **Throughput saturates at N≈128 (~1,260 tokens/s).** Beyond it the engine's gate is a no-op: N=256 and unlimited are identical, because vLLM's own limits (KV cache, `max_num_seqs`) bind before ours does.
-- **The real tradeoff is TPOT, not throughput.** TPOT is flat to N=32 (33 → 39 ms), then degrades sharply — 55 ms at 64, **104 ms at 128**. The last 7.5% of throughput costs a 3× regression in per-token latency.
-- **Throughput-optimal and SLO-optimal N are different numbers.** Maximizing throughput picks N=128 (1,259 tokens/s, TPOT 104 ms). A TPOT SLO of 50 ms — roughly 20 tokens/s per user, about reading speed — picks **N=32**: 860 tokens/s, 68% of peak, at usable per-user latency. Which is correct depends on whether the tier is interactive or bulk.
-- **At this offered load no N met the 2 s TTFT p95 SLO** (all ≥17 s). When an SLO is unreachable at *every* admission setting, the answer is not tuning — it is more replicas. That is the autoscaling signal, and it is the point where a single-node control plane runs out of moves.
-- **Consequence for the control plane:** treat the admission limit as a *safety valve* (KV memory, tenant quotas, TPOT protection), not a throughput dial — and prefer driving it from measured KV-cache pressure (`gpu_cache_usage_perc`) rather than a static constant, since the saturation point moves with prompt and output length. The opposite holds for MLX, where the gate is mandatory for safety.
+**Two inflection points, on two different curves, at different N:**
+
+- **Throughput saturation: N≈128** (~1,260 tokens/s). Beyond it the engine's gate is a no-op — N=256 and unlimited are identical, because vLLM's own limits (KV cache, `max_num_seqs`) bind before ours does.
+- **Latency knee: N≈32–64.** TPOT is flat to N=32 (33 → 39 ms), then degrades sharply: 55 ms at 64, 104 ms at 128.
+
+Because those points differ, **throughput keeps improving after per-token latency has already begun to fall apart** — which is why the throughput-optimal and SLO-optimal settings disagree:
+
+| Objective | Best N | Result |
+|---|---|---|
+| Maximum throughput | 128 | 1,259 tokens/s, TPOT 104 ms |
+| TPOT SLO ≤ 50 ms (≈ reading speed) | **32** | 860 tokens/s (68% of peak), TPOT 39 ms |
+
+Which is correct depends on whether the tier is interactive or bulk.
+
+- **At this offered load no N met the 2 s TTFT p95 SLO** (all ≥17 s). When an SLO is unreachable at *every* admission setting, the answer is not tuning — it is more replicas. That is the autoscaling signal, and the point where a single-node control plane runs out of moves.
+- **Consequence for the control plane:** treat the admission limit as a *safety valve* (KV memory, tenant quotas, TPOT protection), not a throughput dial — and prefer driving it from measured KV-cache pressure (`gpu_cache_usage_perc`) rather than a static constant, since both inflection points move with workload shape. The opposite holds for MLX, where the gate is mandatory for safety.
+
+> **Workload dependence — read the numbers narrowly.** These sweeps use 13-token
+> prompts and 150-token outputs (11.5:1 output-to-input), uniform across requests:
+> a **decode-bound workload with negligible prefill**. That is why batching scaled
+> so cheaply — adding sequences to a memory-bandwidth-bound decode step is nearly
+> free until bandwidth or KV memory runs out. Long prompts would move saturation
+> much earlier (prefill is compute-bound and stalls decode for every sequence in
+> the batch); longer or mixed-length outputs would too, by consuming KV faster and
+> introducing stragglers. N≈128 characterizes *this* workload on *this* GPU, not
+> serving in general.
 
 ### 5. RunPod A40 performance (vLLM, Automatic Prefix Caching)
 *Model: `Qwen/Qwen3-32B-AWQ` | Concurrency: 2 | Requests: 2 | Max Tokens: 64 | Prefix-cache workload (6× repeated policy prefix)*

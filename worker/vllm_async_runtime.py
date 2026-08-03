@@ -32,8 +32,16 @@ class VllmAsyncWorkerRuntime(WorkerRuntime):
         enable_prefix_caching: bool = False,
         dtype: str | None = None,
         quantization: str | None = None,
+        max_num_seqs: int | None = None,
+        max_num_batched_tokens: int | None = None,
     ):
         super().__init__(model_id=model_id)
+        # vLLM's own continuous-batching limits. The effective batch is
+        # min(engine admission limit, max_num_seqs, KV memory available), so
+        # these are the inner dial that pairs with the engine's outer
+        # MAX_CONCURRENT_STREAMS gate.
+        self.max_num_seqs = max_num_seqs
+        self.max_num_batched_tokens = max_num_batched_tokens
         self.tensor_parallel_size = tensor_parallel_size
         self.gpu_memory_utilization = gpu_memory_utilization
         self.max_model_len = max_model_len
@@ -62,6 +70,10 @@ class VllmAsyncWorkerRuntime(WorkerRuntime):
             engine_kwargs["dtype"] = self.dtype
         if self.quantization:
             engine_kwargs["quantization"] = self.quantization
+        if self.max_num_seqs is not None:
+            engine_kwargs["max_num_seqs"] = self.max_num_seqs
+        if self.max_num_batched_tokens is not None:
+            engine_kwargs["max_num_batched_tokens"] = self.max_num_batched_tokens
 
         self.engine = AsyncLLMEngine.from_engine_args(AsyncEngineArgs(**engine_kwargs))
 

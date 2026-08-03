@@ -92,7 +92,11 @@ def create_runtime(backend: str, model_id: str | None = None) -> WorkerRuntime:
         if _env_flag("VLLM_ASYNC", default=False):
             from vllm_async_runtime import VllmAsyncWorkerRuntime
 
-            return VllmAsyncWorkerRuntime(**common_kwargs)
+            return VllmAsyncWorkerRuntime(
+                max_num_seqs=_env_optional_int("VLLM_MAX_NUM_SEQS"),
+                max_num_batched_tokens=_env_optional_int("VLLM_MAX_NUM_BATCHED_TOKENS"),
+                **common_kwargs,
+            )
 
         from vllm_runtime import VllmWorkerRuntime
 

@@ -18,6 +18,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let queue_capacity = env_u16("QUEUE_CAPACITY", 1024) as usize;
     let batch_window_ms = env_u16("BATCH_WINDOW_MS", 10) as u64;
     let max_batch_size = env_u16("MAX_BATCH_SIZE", 4) as usize;
+    // Streaming admission limit (0 = unlimited). Defaults preserve prior
+    // behavior: queued serialized streams, direct did not gate them.
+    let max_concurrent_streams =
+        env_u16("MAX_CONCURRENT_STREAMS", if mode == "queued" { 1 } else { 0 }) as usize;
     let addr = format!("{bind_host}:{bind_port}").parse()?;
     let (queue_tx, queue_rx) = mpsc::channel(queue_capacity);
 
@@ -30,6 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             None
         },
+        max_concurrent_streams,
     );
     let shared_state = service.shared_state();
 
@@ -37,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     reporter.set_serving::<EngineServer<EngineService>>().await;
 
     println!(
-        "Starting engine on {addr} in {mode} mode with worker {worker_endpoint} worker_rpc_timeout_ms={worker_rpc_timeout_ms} batch_window_ms={batch_window_ms} max_batch_size={max_batch_size}"
+        "Starting engine on {addr} in {mode} mode with worker {worker_endpoint} worker_rpc_timeout_ms={worker_rpc_timeout_ms} batch_window_ms={batch_window_ms} max_batch_size={max_batch_size} max_concurrent_streams={max_concurrent_streams}"
     );
 
     if mode == "queued" || mode == "micro_batch" {

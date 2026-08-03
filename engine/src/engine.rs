@@ -40,14 +40,22 @@ impl EngineService {
         mode: String,
         worker_client: DirectWorkerClient,
         queue_tx: Option<mpsc::Sender<QueuedRequest>>,
+        max_concurrent_streams: usize,
     ) -> Self {
-        // Streaming does not flow through the micro-batch scheduler, so in
-        // queued mode we serialize streaming requests with a 1-permit gate to
-        // preserve one-request-at-a-time worker access.
-        let stream_gate = if mode == "queued" {
-            Some(Arc::new(Semaphore::new(1)))
-        } else {
+        // Streaming does not flow through the micro-batch scheduler, so it has
+        // its own admission limit: how many streams may be in flight at once.
+        //
+        // This is the only scheduling dial that matters for a streaming worker
+        // with its own scheduler. It bounds the batch a continuous-batching
+        // runtime (vLLM) can ever form, so N=1 idles the batcher entirely while
+        // N=unlimited lets it saturate. For MLX, N must stay 1: concurrent
+        // native calls segfault.
+        //
+        // 0 means unlimited.
+        let stream_gate = if max_concurrent_streams == 0 {
             None
+        } else {
+            Some(Arc::new(Semaphore::new(max_concurrent_streams)))
         };
         Self {
             mode,

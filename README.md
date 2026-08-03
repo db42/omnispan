@@ -1,46 +1,84 @@
 # Omnispan
 
-Omnispan is a from-scratch **LLM inference serving and scheduling testbed**: a
-small control plane in front of a real model runtime, built to make the core
-tradeoffs of inference orchestration measurable rather than theoretical.
+A small LLM-serving perf lab I built to study, hands-on, how the serving layer
+shapes latency and throughput. A Rust **admission-control engine** sits in front
+of a Python model worker (vLLM or MLX) over gRPC. The point of the lab is to
+isolate one question that's easy to conflate: **engine-level admission control
+vs. runtime-level continuous batching** — two schedulers at two layers — and
+measure how the boundary between them drives TTFT, TPOT, and throughput.
 
-A client sends generation requests to a Rust engine; the engine applies a
-scheduling policy (serialize, queue, or micro-batch) and dispatches to a Python
-worker that runs a real model backend (MLX locally on Apple Silicon, vLLM on
-Linux/NVIDIA GPUs). Every request is instrumented so you can see how a policy
-change moves the numbers that matter: **TTFT, TPOT, throughput, and queue wait**.
-
-## Why this exists
-
-Inference serving is a stack of tradeoffs — batching improves throughput but
-inflates tail latency; prefix caching helps only for structured prompts;
-multi-tenant fairness fights raw utilization. Omnispan is a place to implement
-those policies end to end and *measure* them under concurrent load, instead of
-reasoning about them in the abstract. It is deliberately small so the control
-plane is legible: you can read the scheduler loop, add a policy, and re-run the
-benchmark in one sitting.
-
-- `engine/`: Rust control plane — request intake, scheduling policies, worker RPC
-- `worker/`: Python model worker with pluggable backends (MLX, vLLM)
-- `proto/`: shared gRPC contract
-- `bench/`: load generator, SLO auto-tuner, and result artifacts
-- `docs/`: design and planning notes
+Single node, one worker: the goal is a legible control plane you can read end to
+end, not a distributed system.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    C[Client / bench] -->|SubmitGenerate gRPC| E
-    subgraph Engine [Rust engine]
-      E[Intake + request ID] --> S[Scheduler<br/>direct / queued / micro-batch]
-    end
-    S -->|Generate / GenerateBatch gRPC| W
-    subgraph Worker [Python worker]
-      W[Runtime adapter] --> B{Backend}
-      B -->|Apple Silicon| M[MLX]
-      B -->|Linux + NVIDIA| V[vLLM]
-    end
 ```
+CLIENT ──8 concurrent streams──▶ ENGINE (Rust)   ──gRPC──▶ WORKER (Python) ──▶ vLLM / MLX
+                                 admission control         per-token stream      continuous
+                                 "how many get in?"        TTFT / TPOT timed     batching
+```
+
+The engine decides *how many requests get in*; the runtime decides *how they
+interleave once inside*. The engine never implements batching — it only bounds
+the batch the runtime can form. TTFT is timed at three vantage points (worker,
+engine, client) so queueing is visible separately from compute.
+
+## A measured result
+
+On an A40, `Qwen/Qwen3-32B-AWQ`, 8 concurrent streams, identical worker, varying
+**only** the engine's concurrency gate:
+
+| | `queued` (N=1) | `direct` (N=∞) |
+|---|---|---|
+| Throughput | 32.9 tokens/s | **250.6 tokens/s** |
+| Worker TTFT p50 | 47 ms | 133 ms |
+| Client TTFT p50 | 17,369 ms | **144 ms** |
+| TPOT p50 | 32.9 ms | 33.9 ms |
+
+The instructive part: **per-request and population TTFT move in opposite
+directions.** Restricting concurrency makes any *individual* prefill faster (the
+worker still answers in 47 ms) while making the *population* far slower — that
+47 ms sits behind a ~17 s queue, because the gate pins vLLM's batcher at batch
+size 1. Meanwhile TPOT barely moves (32.9 → 33.9 ms) while throughput grows
+7.6×, which is the signature of continuous batching: eight sequences share each
+decode step, so per-token latency is nearly unchanged.
+
+The takeaway I keep: the right admission policy is a property of the runtime
+beneath, not a global default. (MLX *needs* the gate — concurrent native calls
+segfault; vLLM is punished by it.)
+
+## Where the control plane stops mattering
+
+Sweeping the admission limit further shows the gate has a ceiling. Throughput
+saturates at **N≈128 (~1,260 tokens/s)**; beyond it, N=256 and unlimited are
+identical, because vLLM's KV cache and `max_num_seqs` bind before the engine's
+gate does.
+
+| N | 1 | 8 | 32 | 64 | **128** | 256 | ∞ |
+|---|---|---|---|---|---|---|---|
+| tokens/s | 32.9 | 250.6 | 860.2 | 1,170.4 | **1,258.6** | 1,260.2 | 1,266.4 |
+| TPOT p50 | 33.0 | 34.0 | 38.7 | 55.3 | **103.7** | 103.8 | 102.0 |
+
+*Spliced from two sweeps at different offered loads (N≤16 at 32 requests, N≥32 at 512). N=32 ran in both and landed at 859.9 vs 860.2 tokens/s, which is the join's justification and a reproducibility check.*
+
+The real tradeoff turned out to be TPOT, not throughput: the last 7.5% of
+throughput costs a 3× per-token latency regression. So the throughput-optimal N
+(128) and the SLO-optimal N (32, for a 50 ms TPOT target — roughly reading speed)
+are different numbers. And at this load *no* N met a 2 s TTFT p95 target, which
+is the signal to add replicas rather than keep tuning.
+
+I expected a clean knee and initially didn't find one — the first sweep was
+capped by the benchmark client's own concurrency, not the GPU. Re-running at
+higher offered load produced the curve above.
+
+## What's here
+
+- `engine/` — Rust control plane: intake, admission gate, scheduler loop, worker RPC
+- `worker/` — Python worker with pluggable backends (`mlx_runtime`, `vllm_runtime`, `vllm_async_runtime`)
+- `proto/` — shared gRPC contract (unary, batch, and server-streaming)
+- `bench/` — load generator, SLO auto-tuner, admission sweep, result artifacts
+- `docs/` — [`design.md`](docs/design.md) (request-flow diagrams, what the measurements changed), [`batch-tier.md`](docs/batch-tier.md)
+- `scripts/` — [`RUNPOD.md`](scripts/RUNPOD.md) and GPU-pod provisioning
 
 The worker gRPC contract is identical across backends; the backend switch lives
 entirely inside `worker/`.

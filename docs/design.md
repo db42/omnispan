@@ -250,6 +250,97 @@ That is harder because it requires:
 - preserves a clear latency/throughput tradeoff
 - can be implemented with simpler worker primitives
 
+## Request Flow: Two Layers of Scheduling
+
+There are **two schedulers**, at two layers, and conflating them is the easiest
+mistake to make here. The engine decides *how many requests get in*; the runtime
+decides *how they interleave once inside*. The engine never implements batching —
+it can only bound the batch the runtime is able to form.
+
+### Streaming off
+
+```
+CLIENT
+  │  8 concurrent requests
+  ▼
+ENGINE (our Rust)          ← ADMISSION control
+  │  "how many do I let through?"
+  │  queued  = Semaphore(1) → 1 at a time
+  │  direct  = no limit     → all 8
+  ▼
+WORKER / vLLM              ← CONTINUOUS BATCHING
+     "of what I've been given, how do I
+      interleave them across decode steps?"
+     maintains running set, one fused kernel per step
+```
+
+### Streaming on
+
+Same two layers. What changes is the **return path**: tokens flow back
+continuously instead of once at the end.
+
+```
+        DOWN: admission (once)                    UP: tokens (continuous)
+        ──────────────────────                    ────────────────────────
+CLIENT
+  │  8 × SubmitGenerateStream                ▲  8 independent gRPC streams
+  │                                          │  GenerateChunk{text_delta} … then
+  ▼                                          │  GenerateChunk{finished, metrics}
+                                             │  ⏱ CLIENT TTFT = first chunk on wire
+ENGINE (Rust)         ADMISSION              │
+  │  Semaphore(N)                            │  proxies chunk-by-chunk, no buffering
+  │   N=1 → 1 in, 7 wait (whole stream!)     │  ⏱ ENGINE TTFT = first chunk forwarded
+  │   N=∞ → all 8 in                         │  client hangs up → drop worker stream
+  ▼                                          │
+WORKER (Python, async)                       │  WorkerChunk per token
+  │  N concurrent agenerate_stream()         │  ⏱ WORKER TTFT + TPOT timed here
+  ▼                                          │
+vLLM AsyncLLMEngine   CONTINUOUS BATCHING    │
+     running set: [s1 s2 … sN]               │
+     step k   → one fused kernel → N tokens ─┘   ← one token per sequence,
+     step k+1 → one fused kernel → N tokens ─┘     each pushed to its own stream
+     (sequences join/leave mid-flight)
+```
+
+**One decode step yields N tokens, fanning out to N different client streams.**
+Batching and streaming are perpendicular: the batch runs *across* sequences, the
+stream runs *along* one sequence. They do not trade off against each other.
+
+This is only true of *continuous* batching. Static batching (`mlx_lm.batch_generate`,
+our `micro_batch`) groups at the **request** level and returns only final texts,
+so it genuinely cannot stream — which is why `micro_batch` returns `UNIMPLEMENTED`
+for streaming and why TTFT/TPOT are unmeasurable there.
+
+### Why the admission limit dominates
+
+Under streaming, a request holds its admission slot for its **entire lifetime**,
+not just a dispatch. So `N` directly bounds the runtime's batch size.
+
+Measured on an A40 with `Qwen/Qwen3-32B-AWQ`, 8 concurrent streams, identical
+worker, varying only `ENGINE_MODE`:
+
+| | `queued` (N=1) | `direct` (N=∞) |
+|---|---|---|
+| Throughput | 32.9 tokens/s | 250.6 tokens/s |
+| Worker TTFT p50 | 47 ms | 133 ms |
+| Client TTFT p50 | 17,369 ms | 144 ms |
+| TPOT p50 | 32.9 ms | 33.9 ms |
+
+At N=1 the worker still answers in 47 ms; the other 17.3 s is requests waiting
+their turn, and vLLM's batcher sits permanently at batch size 1. Aggregate
+throughput equal to a single sequence's decode rate is the signature of that.
+
+Two consequences worth keeping:
+
+- **The gate is a workaround for a runtime that cannot handle concurrency.** It is
+  mandatory for MLX (concurrent native calls segfault) and costly for vLLM.
+  The right policy is a property of the runtime beneath, not a global default.
+- **Per-request TTFT and system TTFT move in opposite directions.** Restricting
+  concurrency makes any *individual* prefill faster (48 ms at N=1 vs 330 ms at
+  N=32) while making the *population* far slower, because a queue forms behind
+  it. This is why TTFT is measured at three vantage points; the worker/client gap
+  is exactly the queueing.
+
 ## Request Lifecycle
 
 Every request should move through explicit states.

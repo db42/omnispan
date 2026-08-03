@@ -1,15 +1,22 @@
 # Omnispan Perf Lab Design
 
+This document is both the original design plan and a record of what building it
+actually taught us. Sections carry a **Status** line where the outcome differs
+from the plan. Where a measurement contradicted the original reasoning, the
+original reasoning is kept and marked rather than quietly deleted — the delta is
+the most useful part of the document.
+
 ## Goal
 
-Build a tiny "Token Factory Perf Lab" that demonstrates inference-serving performance behavior clearly.
+Build a tiny "Token Factory Perf Lab" that demonstrates inference-serving
+performance behavior clearly.
 
-The first version is intentionally narrow:
+The first version was intentionally narrow:
 
 - One model
 - One machine
 - One Rust engine process
-- One Python MLX worker process
+- One Python worker process
 - A small number of synthetic tenants
 - A small number of serving modes that can be benchmarked cleanly
 
@@ -17,35 +24,60 @@ This is not a product build. It is a performance lab.
 
 ## Status (current)
 
-Built beyond the original plan below:
+Built beyond the original plan:
 
-- **Backends:** MLX (Apple Silicon) and vLLM (Linux/GPU). vLLM adds continuous batching and optional prefix caching (APC).
-- **Streaming:** `SubmitGenerateStream` (server-streaming) in `direct`/`queued`; `micro_batch` returns `UNIMPLEMENTED`. MLX streams via `stream_generate`; vLLM via `AsyncLLMEngine` (`VLLM_ASYNC=1`), validated on a RunPod A40.
-- **TTFT/TPOT:** worker/engine/client decomposition, reported only where valid — MLX on the streaming path only (unary and static batch return the whole response at once, so a first-token time isn't client-observable; judge those by throughput + latency). vLLM reports per-request TTFT/TPOT natively.
-- **SLO auto-tuner** (`bench/autotune.py`): sweeps engine configs, recommends the max-throughput config meeting a latency SLO, and refuses to pass a config on a metric it cannot measure.
+- **Backends:** MLX (Apple Silicon) and vLLM (Linux/GPU). vLLM brings continuous
+  batching and optional prefix caching (APC).
+- **Streaming:** `SubmitGenerateStream` (server-streaming) in `direct`/`queued`;
+  `micro_batch` returns `UNIMPLEMENTED`. MLX streams via `stream_generate`; vLLM
+  via `AsyncLLMEngine` (`VLLM_ASYNC=1`), validated on a RunPod A40.
+- **Admission limit:** `MAX_CONCURRENT_STREAMS` (0 = unlimited) generalizes the
+  streaming gate. `queued` and `direct` are its endpoints (N=1 and N=∞).
+- **TTFT/TPOT:** worker/engine/client decomposition, reported only where valid —
+  MLX on the streaming path only (unary and static batch return the whole
+  response at once, so a first-token time is not client-observable; judge those
+  by throughput and total latency). vLLM reports per-request TTFT/TPOT natively.
+- **SLO auto-tuner** (`bench/autotune.py`) and **admission sweep**
+  (`bench/sweep_concurrency.py`). Both refuse to pass a config on a metric they
+  could not measure.
 
-Key findings: on MLX, throughput (batching) and per-request streaming (TTFT) can't coexist without continuous batching. On vLLM the same engine policies invert — serializing in front of its continuous batcher costs 7.6x throughput and 120x client TTFT versus letting concurrency through. The correct control-plane policy is a property of the runtime beneath it, which is the argument for folding scheduling into the inference engine (vLLM/SGLang).
+### The three findings that changed the design
 
-## What We Want To Learn
+1. **On MLX, throughput and per-request streaming cannot coexist.** Static
+   batching (`batch_generate`) has no per-sequence token events, so batching and
+   TTFT are mutually exclusive without continuous batching.
+2. **On vLLM the same engine policies invert.** Serializing in front of its
+   continuous batcher costs 7.6× throughput and 120× client TTFT versus letting
+   concurrency through. The correct control-plane policy is a property of the
+   runtime beneath it, not a global default.
+3. **Admission saturates, then stops mattering.** Sweeping N on an A40:
+   throughput plateaus at N≈128 (~1,260 tokens/s) because vLLM's KV cache and
+   `max_num_seqs` bind before the engine's gate does. Past that the control plane
+   has no influence. The live tradeoff is TPOT (33 ms at N=1 → 104 ms at N=128),
+   so the throughput-optimal and SLO-optimal N are different numbers.
 
-- How end-to-end latency decomposes into queue wait time and model execution time
-- How throughput changes when requests are scheduled differently
-- Whether an engine-controlled path beats direct request execution under load
-- How much batching helps on the current MLX runtime
-- What metrics matter for a future Token Factory-style control plane
+## What We Wanted To Learn — and what we found
+
+| Question | Answer |
+|---|---|
+| How end-to-end latency decomposes into queue wait and model execution | Cleanly, once measured at three vantage points. Under load, queueing dominates: at N=1, 99.6% of client TTFT was queue wait. |
+| How throughput changes with scheduling | Enormously, and in a backend-dependent direction: batching helps MLX ~1.6×; *not* gating helps vLLM 7.6×. |
+| Whether an engine-controlled path beats direct execution under load | For MLX yes (direct segfaults). For vLLM no — direct wins decisively. |
+| How much batching helps on MLX | ~1.6× (117 vs 72 tokens/s), at the cost of losing TTFT/TPOT observability entirely. |
+| What metrics matter for a control plane | TTFT and TPOT per vantage point, queue/gate wait, and — the one we lack — KV-cache pressure, which is the real admission signal. |
 
 ## Non-Goals For The First Iteration
 
-- No dashboard yet
+- No dashboard
 - No billing system
 - No full OpenAI API compatibility
 - No multi-node routing
 - No production auth system
 - No full tenant management UI
-- No speculative decoding yet
-- No prefix-aware routing yet (vLLM's own APC is available; the engine does not route by prefix)
-
-Those can come later after the serving engine behavior is understood.
+- No speculative decoding
+- No prefix-aware routing (vLLM's own APC is available; the engine does not route
+  by prefix)
+- No offline batch tier — see [batch-tier.md](batch-tier.md)
 
 ## Related Notes
 
@@ -53,202 +85,133 @@ Those can come later after the serving engine behavior is understood.
 
 ## High-Level Architecture
 
-There are three conceptual layers, but only two processes in the first version.
+Two processes: a Rust control plane and a Python model worker.
 
-### Layer 1: Edge + Serving Engine
-
-Language: Rust
+### Layer 1: Edge + Serving Engine (Rust)
 
 Responsibilities:
 
-- Accept external requests
-- Validate request shape
-- Assign request IDs
-- Track request lifecycle
-- Own the pending queue
-- Run the scheduling loop
-- Choose execution mode
-- Record metrics
-- Forward work to the Python worker
-- Route responses back to callers
+- Accept external requests, validate shape, assign request IDs
+- **Admission control** — decide how many requests reach the worker, and later
+  which ones
+- Own the pending queue and the scheduler loop (unary path)
+- Own the streaming admission gate (streaming path)
+- Record metrics and route responses back to callers
 
-This layer should contain almost all performance-critical orchestration logic.
+> **Status: revised.** The original plan said this layer "should contain almost
+> all performance-critical orchestration logic." That is true only when the
+> worker has no scheduler of its own. With vLLM, the performance-critical
+> scheduling — which sequences advance each decode step, KV allocation,
+> preemption — lives in the runtime, and the engine's remaining job is admission.
+> Measured consequence: applying engine-side serialization to vLLM cost 7.6×
+> throughput. See [Request Flow](#request-flow-two-layers-of-scheduling).
 
-### Layer 2: Model Worker
-
-Language: Python
+### Layer 2: Model Worker (Python)
 
 Responsibilities:
 
-- Load the MLX model once
-- Own tokenizer and runtime state
-- Execute inference requests
-- Return response text and token counts
+- Load the model once; own tokenizer and runtime state
+- Execute inference requests (unary, batch, streaming)
 - Expose timing data for worker-side execution
 
-This layer should not own scheduling policy.
+> **Status: revised.** The original rule was "this layer should not own
+> scheduling policy." That holds for MLX, which has no scheduler. It is false for
+> vLLM, which owns continuous batching — genuinely a scheduling policy, and the
+> one that determines throughput. The accurate rule is: *the worker owns
+> intra-worker scheduling; the engine owns admission.*
 
 ### Optional Future Split
 
-Later, the Rust process can be split into two conceptual services:
-
-- API gateway
-- engine
-
-That split is not needed for the first perf lab.
+The Rust process could later split into an API gateway and an engine. Not needed
+at this scale.
 
 ## Process Model
 
-Initial deployment:
+- `omnispan-engine` (Rust)
+- `worker/worker.py` (Python)
 
-- `omnispan-engine` in Rust
-- `worker/worker.py` in Python
-
-Single machine only.
-
-The engine communicates with one worker over internal RPC.
+Single machine; the engine talks to one worker over gRPC.
 
 ## Internal RPC Boundary
 
-The internal RPC should be small and explicit.
+gRPC between Rust and Python — strongly typed, streaming-capable, and a clean
+path to multiple workers.
 
-Use gRPC between Rust and Python.
+### Worker RPC
 
-Reason:
+**Status: implemented, extended beyond the original unary plan.**
 
-- Strongly typed contract
-- Easy streaming extension later
-- Familiar from `ftrie`
-- Clean future path to multiple workers
+| RPC | Shape | Notes |
+|---|---|---|
+| `Generate` | unary | original v1 contract |
+| `GenerateBatch` | unary, N requests | static batch (MLX `batch_generate`) |
+| `GenerateStream` | server-streaming | one `WorkerChunk` per token, then a terminal summary chunk |
 
-### Initial Worker RPC
+Metric fields added since: `ttft_ms`, `tpot_ms` on replies and terminal chunks;
+`engine_ttft_ms` and `gate_wait_ms` on the engine's `GenerateChunk`.
 
-Unary is enough for version 1.
-
-`Generate`
-
-Request fields:
-
-- `request_id`
-- `tenant_id`
-- `prompt`
-- `max_tokens`
-- `submitted_at_ms`
-
-Response fields:
-
-- `request_id`
-- `response_text`
-- `input_tokens`
-- `output_tokens`
-- `worker_latency_ms`
-- `status`
-- `error_message`
-
-Later extensions (now implemented, except where noted):
-
-- streaming token chunks — `GenerateStream` (worker) / `SubmitGenerateStream` (engine)
-- batched request execution — `GenerateBatch`
-- TTFT and decode timing split — `ttft_ms` / `tpot_ms` fields
-- prefix-cache metadata — not yet (vLLM handles APC internally)
+Still not carried on the wire: prefix-cache metadata (vLLM handles APC
+internally and we do not read its per-request cache stats).
 
 ## Serving Modes
 
-The engine will support three modes first.
+**Status: all three implemented.** Selected with `ENGINE_MODE`. Streaming adds an
+orthogonal dial, `MAX_CONCURRENT_STREAMS`.
 
 ### 1. `direct`
 
-Behavior:
+The engine calls the worker immediately; no queue.
 
-- request enters the engine
-- the engine immediately calls the worker for that single request
-- no queue ownership beyond the active request
-
-Purpose:
-
-- baseline for comparison
-- measure current steady-state path with Rust edge in front
-
-Expected behavior:
-
-- simplest control path
-- poor behavior under concurrency when many requests compete for one worker
-
-Current status:
-
-- debug-only
-- concurrent direct load has triggered native crashes in the Python MLX worker
-- keep this mode for single-request debugging, not for throughput comparisons
+- **MLX:** debug-only. Concurrent direct load triggers native crashes in the MLX
+  runtime.
+- **vLLM:** the *best* mode. Concurrency passes straight through to the
+  continuous batcher — 250.6 tokens/s vs 32.9 for `queued` at concurrency 8.
 
 ### 2. `queued`
 
-Behavior:
+A background scheduler loop pulls one request at a time; exactly one request is
+in the worker at a time. Streaming uses a 1-permit gate instead of the loop.
 
-- request enters a shared queue
-- a background scheduler loop inside the engine pulls one request at a time
-- exactly one request is sent to the worker at a time
+- **MLX:** the primary execution path — the safe concurrency boundary for a
+  runtime that segfaults under parallel native calls.
+- **vLLM:** actively harmful. It pins the running batch at 1 and idles the
+  batcher.
 
-Purpose:
-
-- establish explicit queue ownership
-- separate queue wait time from worker execution time
-- create the correct shape for later batching
-
-Expected behavior:
-
-- same or similar worker execution latency as `direct`
-- clearer queueing metrics
-- improved architectural clarity, not necessarily better raw latency
-
-Current status:
-
-- this is now the primary execution path for performance work
-- queued mode is the safe concurrency boundary for the current Python MLX worker
+> **Status: original claim corrected.** The plan called queued "the primary
+> execution path for performance work" without qualification. It is
+> backend-dependent: mandatory for MLX, a 7.6× penalty for vLLM.
 
 ### 3. `micro_batch`
 
-Behavior:
+The engine waits a short window, drains up to `MAX_BATCH_SIZE` pending requests,
+and dispatches them through the worker batch RPC.
 
-- request enters a shared queue
-- engine waits for a short batching window
-- engine collects up to `batch_size` pending requests
-- engine dispatches them as a batch if worker supports it
-- if worker does not support true batching yet, the engine executes the collected set as a grouped scheduling unit and records the batch attempt
+- **MLX:** real and effective — ~117 tokens/s peak (w20/b4), ~1.6× over queued.
+- **Streaming:** returns `UNIMPLEMENTED`; a static batch cannot stream per request.
+- **Observability cost:** TTFT and TPOT are unmeasurable on this path.
 
-Purpose:
+## What `micro_batch` Actually Taught Us
 
-- measure batching behavior cleanly
-- create the first real performance experiment
-- prepare for true continuous batching later
+> **Status: premise superseded.** This section originally argued micro-batch was
+> a stepping stone toward building continuous batching in the engine. It is not.
+> The original reasoning is preserved below because the conclusion it led to was
+> wrong in an instructive way.
 
-Expected behavior:
+**Original reasoning.** True continuous batching is token-step scheduling across
+in-flight requests, which needs prefill/decode phase awareness, per-request state
+across decode steps, and detailed worker runtime control. `micro_batch` was the
+correct first approximation because it teaches the engine shape, preserves a
+clear latency/throughput tradeoff, and can be built on simpler worker primitives.
 
-- better throughput under concurrency if batching is real and effective
-- slightly worse per-request latency at low load
-- queue wait time becomes an intentional tradeoff
+**What we learned.** Micro-batch is a *workaround for a runtime without a
+scheduler*, not a step toward one. Continuous batching cannot be implemented in
+the control plane at all: it requires advancing every active sequence one decode
+step inside a shared kernel, plus KV-block allocation, eviction, and mid-flight
+admission. **It must live where the KV cache lives.** A control plane above it can
+only decide who gets in and when.
 
-Current status:
-
-- implemented as a first real batch path
-- the engine waits for a short batching window, drains pending requests up to a maximum batch size, and dispatches them through the worker batch RPC
-- worker-side `mlx_lm.batch_generate` has shown a meaningful throughput gain over serial execution in local measurement
-
-## Why `micro_batch` Before True Continuous Batching
-
-True continuous batching is token-step scheduling across in-flight requests.
-
-That is harder because it requires:
-
-- prefill/decode phase awareness
-- request state tracking across decode steps
-- more detailed worker runtime control
-- often a more specialized inference backend
-
-`micro_batch` is the correct first approximation because it:
-
-- teaches the engine shape
-- preserves a clear latency/throughput tradeoff
-- can be implemented with simpler worker primitives
+This is why the industry consolidated on vLLM/SGLang rather than on smart
+gateways, and it is the strongest single finding in this project.
 
 ## Request Flow: Two Layers of Scheduling
 
@@ -343,184 +306,136 @@ Two consequences worth keeping:
 
 ## Request Lifecycle
 
-Every request should move through explicit states.
+> **Status: aspirational.** The explicit state machine below is *not*
+> implemented. In practice the engine records `received_at` and `scheduled_at`
+> and derives queue/gate wait from them; the worker times its own execution. The
+> full model is retained as the target shape if per-request tracing is added.
 
-States:
+States: `received`, `queued`, `scheduled`, `dispatched`, `running`, `completed`,
+`failed`.
 
-- `received`
-- `queued`
-- `scheduled`
-- `dispatched`
-- `running`
-- `completed`
-- `failed`
+Timestamps: `received_at`, `queued_at`, `scheduled_at`, `worker_started_at`,
+`worker_completed_at`, `responded_at`.
 
-Timestamps to record:
-
-- `received_at`
-- `queued_at`
-- `scheduled_at`
-- `worker_started_at`
-- `worker_completed_at`
-- `responded_at`
-
-Derived metrics:
-
-- queue wait time
-- engine overhead
-- worker execution time
-- end-to-end latency
-
-This state model matters more than feature breadth.
+Derived: queue wait, engine overhead, worker execution time, end-to-end latency.
 
 ## Metrics To Capture
 
-The lab should capture the following in all modes.
+**Implemented** — per request: request ID, tenant ID, serving mode, status, input
+and output tokens, queue/gate wait ms, worker latency ms, end-to-end latency ms,
+and on the streaming path `ttft_ms` / `tpot_ms` at worker, engine, and client
+vantage points.
 
-Per-request:
+**Implemented** — aggregate: total/success/failure counts, requests per second,
+tokens per second, p50/p95/p99 and mean for every latency series.
 
-- request ID
-- tenant ID
-- serving mode
-- status
-- input tokens
-- output tokens
-- queue wait ms
-- worker latency ms
-- end-to-end latency ms
+**Not implemented:**
 
-Aggregate:
-
-- total requests
-- success count
-- failure count
-- requests per second
-- tokens per second
-- p50 latency
-- p95 latency
-- p99 latency
-- average queue wait
-- average worker latency
 - batch size distribution
-- engine queue depth over time
-
-Implemented since (streaming path): TTFT and TPOT, each with worker / engine / client vantage points.
-
-Still future:
-
-- prefix cache hit rate
-- prefill tokens saved
+- engine queue depth over time (only an instantaneous `queue_depth` in
+  `GetEngineStats`)
+- prefix cache hit rate, prefill tokens saved
+- **KV-cache pressure** (`gpu_cache_usage_perc` from vLLM) — the sweep showed this
+  is the signal a real admission controller should close the loop on, rather than
+  a static N
 
 ## Tenants In The First Perf Lab
 
-Tenants exist only to model contention and future isolation policies.
+Tenants exist only to model contention and future isolation policies. They are
+labels and metrics dimensions; no quota enforcement is implemented.
 
-Keep this minimal:
-
-- `shared-basic`
-- `reserved-pro`
-
-For the first pass, tenants are labels and metrics dimensions.
-
-Do not build full quota enforcement yet unless it directly helps a benchmark.
+The benchmark rotates synthetic tenants (`tenant-1`, `tenant-2`, … via
+`--tenant-prefix` / `--tenant-count`). The originally planned `shared-basic` /
+`reserved-pro` classes were never built, and would only be worth adding alongside
+real fairshare scheduling.
 
 ## Benchmark Plan
 
-The first benchmark matrix should be small and repeatable.
+**Status: implemented and exceeded.**
 
-Dimensions:
+| Planned | Actual |
+|---|---|
+| modes `direct`, `queued`, `micro_batch` | all three, plus streaming and an admission-limit sweep |
+| concurrency 1, 5, 10, 20 | 1–10 locally (MLX); 8–256 on GPU |
+| prompt shape short and medium | short/medium, plus a prefix-cache-heavy shape (`--shared-prefix-repeats`) |
+| JSON artifacts + one markdown note | JSON artifacts in `bench/` and `bench/runpod/`; results tables in the README |
 
-- mode: `direct`, `queued`, `micro_batch`
-- concurrency: `1`, `5`, `10`, `20`
-- prompt shape: short and medium
+Harnesses: `bench/benchmark.py` (load generator, `--stream`),
+`bench/autotune.py` (SLO-driven config search), `bench/sweep_concurrency.py`
+(admission-limit sweep).
 
-Outputs:
+## Module Layout
 
-- JSON result artifacts
-- one markdown comparison note
+**Status: as built** (the planned `types.rs`, `metrics.rs`, and
+`worker_types.py` were never needed).
 
-The benchmark harness should produce comparable output across all modes.
+Rust:
 
-## Suggested Module Layout
+- `engine/src/bin/omnispan-engine.rs` — config wiring and startup
+- `engine/src/config.rs`, `engine/src/lib.rs`
+- `engine/src/engine.rs` — gRPC service, streaming proxy, admission gate
+- `engine/src/queue.rs` — scheduler loop and micro-batch formation
+- `engine/src/worker_client.rs` — worker RPC, unary/batch/streaming
 
-Rust side:
+Python:
 
-- `engine/src/bin/omnispan-engine.rs`
-- `engine/src/config.rs`
-- `engine/src/lib.rs`
-- `engine/src/types.rs`
-- `engine/src/engine.rs`
-- `engine/src/queue.rs`
-- `engine/src/metrics.rs`
-- `engine/src/worker_client.rs`
+- `worker/worker.py` — gRPC service
+- `worker/worker_runtime.py` — backend selection and the runtime interface
+- `worker/mlx_runtime.py`, `worker/vllm_runtime.py`, `worker/vllm_async_runtime.py`
 
-Python side:
+Engine policy stays independent of transport; the API handler does not know how
+the worker is called.
 
-- `worker/worker.py`
-- `worker/worker_types.py`
-- `worker/worker_runtime.py`
+## Implementation Order — as completed
 
-Keep engine policy independent from the transport layer.
+| Milestone | Outcome |
+|---|---|
+| 1. Direct mode through Rust | Done. Exposed the MLX concurrency crash, which forced the queued path. |
+| 2. Queued mode | Done. Separated queue wait from worker time — the decomposition everything else rests on. |
+| 3. Micro-batch mode | Done. ~1.6× on MLX; also revealed that static batching forfeits TTFT/TPOT. |
+| 4. Benchmark artifacts | Done. `bench/` and `bench/runpod/`, with results tables in the README. |
+| 5. *(added)* TTFT/TPOT + streaming | Done. Three-vantage decomposition; `SubmitGenerateStream`. |
+| 6. *(added)* vLLM backend + async streaming | Done. Validated on a RunPod A40. |
+| 7. *(added)* Admission limit + sweep | Done. Found saturation at N≈128 and the TPOT tradeoff. |
 
-The API handler should not know how the worker is called.
-
-## Implementation Order
-
-### Milestone 1: Direct Mode Through Rust
-
-- Rust engine accepts requests
-- Rust engine forwards unary RPC to Python worker
-- End-to-end request works through the new boundary
-- Metrics are emitted
-
-### Milestone 2: Queued Mode
-
-- Add explicit queue
-- Add background scheduler loop
-- Serialize requests through the queue
-- Measure queue wait separately from worker time
-
-### Milestone 3: Micro-Batch Mode
-
-- Add batching window and max batch size
-- Group pending requests
-- Dispatch grouped work
-- Compare throughput and latency against direct and queued
-
-### Milestone 4: Benchmark Artifacts
-
-- Save results for all three modes
-- Write comparison notes
-- Identify the next worthwhile optimization
+Next candidates, in order of value: adaptive admission driven by KV-cache
+pressure; multi-tenant fairshare over GPU-time; prefix-affinity routing (needs
+multiple workers).
 
 ## Design Rules
 
-- The worker owns model state, not the engine.
-- The engine owns queueing and execution policy.
+- The worker owns model state and **intra-worker scheduling**; the engine owns
+  **admission**.
 - Every request must be traceable by request ID.
 - Every serving mode must produce the same benchmark schema.
 - Do not hide queue time inside worker time.
+- **Do not report a metric the execution path cannot actually measure.** Report
+  it only where it is observable, and let an unmeasured metric fail an SLO check
+  rather than silently pass it.
 - Do not prematurely add product features that do not change performance learning.
 
-## Open Questions
+> The original second rule read "the engine owns queueing and execution policy."
+> Execution policy belongs to the runtime whenever the runtime has one.
 
-These need answering before implementation goes deep:
+## Open Questions — resolved
 
-- Does the Python MLX worker support true multi-request batch execution in a form useful here?
-- If not, should `micro_batch` start as grouped scheduling with sequential execution, or should the worker API be designed for future batched execution immediately?
-- Do we want the Rust edge to expose HTTP first, or start with gRPC end-to-end for faster internal iteration?
-- Do we want streaming responses in milestone 1, or keep everything unary until queueing is stable?
+| Question | Answer |
+|---|---|
+| Does the MLX worker support useful multi-request batch execution? | Yes. `mlx_lm.batch_generate` is real and gives ~1.6×, but returns only final texts, so it forfeits TTFT/TPOT. |
+| Should `micro_batch` be grouped scheduling or a real batch API? | A real batch RPC, and it was the right call — it made the observability cost of static batching measurable. |
+| HTTP edge first, or gRPC end-to-end? | gRPC end-to-end. Server-streaming later came almost free as a result. |
+| Streaming in milestone 1, or unary until queueing is stable? | Unary first was correct. Streaming layered cleanly on top of a stable queue, and the unary path still serves benchmarks and `grpcurl`. |
 
-## Recommended Answer To The Open Questions
+The original guidance — assume unary first, assume no batching primitive until
+proven, keep transport gRPC, keep milestone 1 synchronous — held up. It kept the
+design honest and avoided fake sophistication.
 
-For now:
+## Open Questions — current
 
-- assume unary worker calls first
-- assume no true batching primitive until proven
-- expose a simple HTTP edge later, not first
-- keep engine-to-worker transport gRPC
-- keep milestone 1 synchronous and unary
-
-That keeps the design honest and minimizes fake sophistication.
-
-**Resolved since:** MLX's `batch_generate` is a usable batch primitive (micro-batch is real, ~1.6× throughput); transport is gRPC end-to-end; streaming was added after queueing was stable, as server-streaming on top of the unary contract rather than a milestone-1 feature.
+- What is the right control signal for admission? The sweep says a static N is
+  the wrong shape; KV-cache pressure plus a TTFT/TPOT SLO is likely the right
+  closed loop.
+- How should the engine learn a backend's capability, rather than being told?
+  `direct` for vLLM and `queued` for MLX are opposite defaults, currently chosen
+  by hand.
+- What breaks first at multi-worker scale — routing, or fairness?

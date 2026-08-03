@@ -25,37 +25,40 @@ engine, client) so queueing is visible separately from compute.
 
 ## A measured result
 
-One A40, `Qwen/Qwen3-32B-AWQ`, 8 concurrent streams of a 13-token prompt with
+One A40, `Qwen/Qwen3-32B-AWQ`. 32 concurrent streams of a 13-token prompt with
 150-token outputs. Identical worker, identical load — varying **only** the
-engine's concurrency gate:
+engine's admission limit:
 
-| | `queued` (N=1) | `direct` (N=∞) |
+| | gate at N=1 | gate open (N=∞) |
 |---|---|---|
-| Throughput | 32.9 tokens/s | **250.6 tokens/s** |
-| Client TTFT p50 | 17,369 ms | **144 ms** |
-| Worker TTFT p50 | 47 ms | 133 ms |
-| TPOT p50 | 32.9 ms | 33.9 ms |
+| Throughput | 32.9 tokens/s | **859.9 tokens/s** (26×) |
+| Client TTFT p50 | 76,845 ms | **334 ms** (230×) |
+| — of which queue wait | 76,794 ms | 0.03 ms |
+| Worker TTFT p50 | 48 ms | 330 ms |
+| TPOT p50 | 33.0 ms | 38.2 ms |
+| Wall clock | 158.7 s | **6.1 s** |
 
 The instructive part: **per-request and population TTFT move in opposite
-directions.** Restricting concurrency makes any *individual* prefill faster — the
-worker still answers in 47 ms, since that one sequence has the GPU to itself —
-while making the *population* far slower, because that 47 ms now sits behind a
-~17 s queue. The gate pins vLLM's batcher at batch size 1, so aggregate
-throughput collapses to a single sequence's decode rate. In `direct`, prefill
-competes with seven other sequences' decode steps and slows to 133 ms; every
-client still sees its first token ~120× sooner.
+directions.** Closing the gate makes any *individual* prefill faster — the worker
+answers in 48 ms, since that one sequence has the GPU to itself — while making
+the *population* catastrophically slower, because that 48 ms now sits behind a
+77-second queue. The gate pins vLLM's batcher at batch size 1, so aggregate
+throughput collapses to a single sequence's decode rate. Opening it lets prefill
+compete with 31 other sequences' decode steps (330 ms, ~7× slower per request),
+and every client still sees its first token 230× sooner.
 
-Meanwhile TPOT barely moves (32.9 → 33.9 ms) while throughput grows 7.6×. That
-is the signature of continuous batching: eight sequences share each decode step,
-so per-token latency is nearly unchanged while aggregate output multiplies.
+Meanwhile TPOT moves only 33.0 → 38.2 ms while throughput grows 26×. That is the
+signature of continuous batching: sequences share each decode step, so per-token
+latency is nearly unchanged while aggregate output multiplies.
 
 The takeaway I keep: the right admission policy is a property of the runtime
 beneath, not a global default. (MLX *needs* the gate — concurrent native calls
 segfault; vLLM is punished by it.)
 
-*Small sample — 8 requests — but an independent 32-request sweep reproduced both
-cells to within 0.1% (32.86 and 250.63 tokens/s), and this A/B is the cleanest
-controlled comparison: same offered load, one variable.*
+*The size of the effect depends on offered load, so it is quoted with one: "N=∞"
+means a batch of at most 32 here. At 8 concurrent streams the same comparison
+gives 7.6× and 120×; the gate can only cost you as much concurrency as there is
+to admit.*
 
 ## Where the control plane stops mattering
 

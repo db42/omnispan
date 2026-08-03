@@ -559,23 +559,21 @@ placement, fractional GPU allocation, checkpoint/restore, workload isolation)
 are intentionally out of scope for the running code and are captured as design
 notes instead.
 
-## Design notes and roadmap
+## Design notes and what the results point to next
 
-See [`docs/`](docs/) for design and planning notes. Planned next steps, roughly
-in priority order:
+[`docs/design.md`](docs/design.md) has the request-flow diagrams and a record of
+which measurements changed the design; [`docs/batch-tier.md`](docs/batch-tier.md)
+is a design note on an offline batch tier.
 
-- Prefix-aware / cache-affinity routing (group requests by shared prefix)
-- Multi-tenant weighted-fair-queue scheduling with per-tenant fairness metrics
-- SGLang worker backend behind the existing runtime interface
-- Disaggregated prefill/decode workers with KV handoff (the "prefill leader / decode worker / KV router" pattern)
-- Streaming under `micro_batch` via token-level continuous batching (the reason engines like vLLM exist)
-- Priority classes in the streaming gate (online preempts batch) — see [docs/batch-tier.md](docs/batch-tier.md)
-- Adaptive admission driven by measured KV-cache pressure (`gpu_cache_usage_perc`) instead of a static limit
+Three next steps follow directly from the measurements above:
 
-End-to-end response streaming (`SubmitGenerateStream`) is implemented for
-`direct` and `queued` modes, with client/engine/worker TTFT decomposition. The
-MLX path is validated locally; the vLLM `AsyncLLMEngine` streaming path
-(`VLLM_ASYNC=1`) is validated on a RunPod A40 (see results table 3).
+- **Adaptive admission driven by KV-cache pressure** (`gpu_cache_usage_perc`) rather than a static limit. The sweep showed both inflection points move with workload shape, so a fixed N is the wrong control variable — the loop should close on the signal that actually predicts saturation.
+- **Priority classes in the streaming gate**, so interactive work preempts bulk. This is the smallest change that demonstrates the online/batch tension on real hardware, without a job store — see [`docs/batch-tier.md`](docs/batch-tier.md).
+- **Prefix-affinity routing**, once there is more than one worker: route requests sharing a prefix to the worker whose KV cache is already warm. Motivated by the 1.47× prefix-caching result below.
+
+Deliberately *not* on the list: implementing continuous batching in the engine.
+The central finding here is that it belongs where the KV cache lives, so the
+control plane's job is admission and routing, not batching.
 
 ## Regenerate Python gRPC stubs
 

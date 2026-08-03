@@ -328,12 +328,12 @@ TTFT/TPOT from vLLM's own per-request metrics — see below.)
 ### vLLM (Linux + NVIDIA GPU)
 
 Non-streaming uses the synchronous `LLM` (default). Streaming uses the
-`AsyncLLMEngine` runtime (`VLLM_ASYNC=1`), which is GPU-only and RunPod-pending.
+`AsyncLLMEngine` runtime (`VLLM_ASYNC=1`), validated on a RunPod A40.
 
 | Policy | Non-streaming (sync `LLM`, default) | Streaming (`VLLM_ASYNC=1`, async engine) |
 |---|---|---|
-| `direct` | ⚠️ single request; the sync `LLM` is not built for concurrent calls | ✅ **ideal** — concurrent streams all reach vLLM's continuous batcher; per-request TTFT/TPOT stay valid |
-| `queued` | ✅ serialized; the safe way to drive the sync `LLM` under load | ✅ works, but the stream gate serializes and **underuses** vLLM's batcher |
+| `direct` | ⚠️ single request; the sync `LLM` is not built for concurrent calls | ✅ **ideal** — concurrent streams all reach vLLM's continuous batcher; **250.6 tokens/s, 144 ms client TTFT** (measured) |
+| `queued` | ✅ serialized; the safe way to drive the sync `LLM` under load | ⚠️ works but **starves the batcher** — 32.9 tokens/s, 17.4 s client TTFT (measured; 7.6× slower than `direct`) |
 | `micro_batch` | ✅ explicit batch; TTFT/TPOT valid (vLLM's native metrics), but **partly redundant** with vLLM's own batching | ❌ `UNIMPLEMENTED` (engine-level) |
 
 **Reading the matrices — the backends invert.** MLX has no internal scheduler, so
@@ -415,7 +415,25 @@ have both without continuous batching.
 - **Engine overhead is negligible:** engine TTFT tracks worker TTFT within ~3 ms; the time is in the model and the queue, not the control plane.
 - TTFT/TPOT come from the streaming path; the unary and `micro_batch` paths are judged by throughput and total latency (table 1).
 
-### 3. RunPod A40 performance (vLLM, Automatic Prefix Caching)
+### 3. Scheduling policy vs. continuous batching (vLLM, RunPod A40)
+*Model: `Qwen/Qwen3-32B-AWQ` | Concurrency: 8 | Requests: 8 | Max Tokens: 150 | streaming (`VLLM_ASYNC=1`). Artifacts: [`bench/runpod/qwen3_32b_awq_async_*_stream_8x8.json`](bench/runpod/).*
+
+Identical load and identical worker; **only the engine's scheduling policy differs.**
+
+| Metric | `queued` (stream gate serializes) | `direct` (concurrency passes through) |
+|---|---|---|
+| Throughput | 32.9 tokens/s | **250.6 tokens/s** (7.6×) |
+| Wall clock | 39.6 s | **5.2 s** |
+| Worker TTFT (p50) | 47 ms | 133 ms |
+| **Client TTFT (p50)** | **17,369 ms** | **144 ms** (120× better) |
+| Queue wait (p50) | 17,309 ms | 0.05 ms |
+| TPOT (p50) | 32.9 ms | 33.9 ms |
+
+- **Serializing in front of a continuous batcher destroys it:** in `queued` the worker still answers in 47 ms, but 99.6% of client-observed latency is engine queue wait, because vLLM only ever sees one request at a time and has nothing to batch.
+- **TPOT barely moves (32.9 → 33.9 ms) while throughput grows 7.6×.** That is continuous batching working: vLLM interleaves 8 sequences through shared decode steps, so per-token latency is nearly unchanged while aggregate output multiplies.
+- **This is the exact inverse of MLX.** MLX segfaults on concurrent `direct` calls and *needs* the engine to serialize or batch; vLLM needs the engine to get out of the way. The right control-plane policy is a property of the runtime beneath it — which is the argument for folding scheduling into the inference engine (vLLM/SGLang) rather than layering it on top.
+
+### 4. RunPod A40 performance (vLLM, Automatic Prefix Caching)
 *Model: `Qwen/Qwen3-32B-AWQ` | Concurrency: 2 | Requests: 2 | Max Tokens: 64 | Prefix-cache workload (6× repeated policy prefix)*
 
 | Configuration | Wall Clock | Throughput | Worker Latency (p50) | Queue Wait (p50) | Throughput Gain |
@@ -455,7 +473,7 @@ in priority order:
 End-to-end response streaming (`SubmitGenerateStream`) is implemented for
 `direct` and `queued` modes, with client/engine/worker TTFT decomposition. The
 MLX path is validated locally; the vLLM `AsyncLLMEngine` streaming path
-(`VLLM_ASYNC=1`) is implemented and pending validation on RunPod GPU hardware.
+(`VLLM_ASYNC=1`) is validated on a RunPod A40 (see results table 3).
 
 ## Regenerate Python gRPC stubs
 

@@ -1,0 +1,72 @@
+{
+  "target": "127.0.0.1:50061",
+  "mode": "vllm_async_queued_stream",
+  "total_requests": 8,
+  "successful_requests": 8,
+  "failed_requests": 0,
+  "wall_clock_seconds": 39.61,
+  "requests_per_second": 0.2,
+  "tokens_per_second": 32.92,
+  "total_input_tokens": 104,
+  "total_output_tokens": 1200,
+  "client_latency_ms": {
+    "p50": 22269.14,
+    "p95": 37869.14,
+    "p99": 39256.53,
+    "mean": 22272.32
+  },
+  "engine_latency_ms": {
+    "p50": 22258.15,
+    "p95": 37856.81,
+    "p99": 39243.63,
+    "mean": 22261.27
+  },
+  "worker_latency_ms": {
+    "p50": 4947.51,
+    "p95": 4951.23,
+    "p99": 4951.29,
+    "mean": 4947.07
+  },
+  "queue_wait_ms": {
+    "p50": 17308.66,
+    "p95": 32903.77,
+    "p99": 34290.64,
+    "mean": 17312.47
+  },
+  "failures": [],
+  "ttft_ms": {
+    "measured_samples": 8,
+    "p50": 47.49,
+    "p95": 48.44,
+    "p99": 48.45,
+    "mean": 47.27
+  },
+  "tpot_ms": {
+    "measured_samples": 8,
+    "p50": 32.88,
+    "p95": 32.91,
+    "p99": 32.91,
+    "mean": 32.88
+  },
+  "client_ttft_ms": {
+    "measured_samples": 8,
+    "p50": 17369.26,
+    "p95": 32964.98,
+    "p99": 34352.04,
+    "mean": 17372.19
+  },
+  "client_tpot_ms": {
+    "measured_samples": 8,
+    "p50": 32.88,
+    "p95": 32.91,
+    "p99": 32.91,
+    "mean": 32.88
+  },
+  "engine_ttft_ms": {
+    "measured_samples": 8,
+    "p50": 49.32,
+    "p95": 50.43,
+    "p99": 50.43,
+    "mean": 49.11
+  }
+}

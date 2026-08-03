@@ -20,11 +20,11 @@ This is not a product build. It is a performance lab.
 Built beyond the original plan below:
 
 - **Backends:** MLX (Apple Silicon) and vLLM (Linux/GPU). vLLM adds continuous batching and optional prefix caching (APC).
-- **Streaming:** `SubmitGenerateStream` (server-streaming) in `direct`/`queued`; `micro_batch` returns `UNIMPLEMENTED`. MLX streams via `stream_generate`; vLLM via `AsyncLLMEngine` (`VLLM_ASYNC=1`, RunPod-pending validation).
+- **Streaming:** `SubmitGenerateStream` (server-streaming) in `direct`/`queued`; `micro_batch` returns `UNIMPLEMENTED`. MLX streams via `stream_generate`; vLLM via `AsyncLLMEngine` (`VLLM_ASYNC=1`), validated on a RunPod A40.
 - **TTFT/TPOT:** worker/engine/client decomposition, reported only where valid — MLX on the streaming path only (unary and static batch return the whole response at once, so a first-token time isn't client-observable; judge those by throughput + latency). vLLM reports per-request TTFT/TPOT natively.
 - **SLO auto-tuner** (`bench/autotune.py`): sweeps engine configs, recommends the max-throughput config meeting a latency SLO, and refuses to pass a config on a metric it cannot measure.
 
-Key finding: on MLX, throughput (batching) and per-request streaming (TTFT) can't coexist without continuous batching — which is why vLLM/SGLang fold scheduling into the runtime.
+Key findings: on MLX, throughput (batching) and per-request streaming (TTFT) can't coexist without continuous batching. On vLLM the same engine policies invert — serializing in front of its continuous batcher costs 7.6x throughput and 120x client TTFT versus letting concurrency through. The correct control-plane policy is a property of the runtime beneath it, which is the argument for folding scheduling into the inference engine (vLLM/SGLang).
 
 ## What We Want To Learn
 

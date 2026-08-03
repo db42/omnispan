@@ -48,7 +48,8 @@ collapses to a single sequence's decode rate, and the run takes 159 s instead of
 
 Meanwhile TPOT moves only 33.0 → 38.2 ms while throughput grows 26×. That is the
 signature of continuous batching: sequences share each decode step, so per-token
-latency is nearly unchanged while aggregate output multiplies.
+latency is nearly unchanged while aggregate output multiplies. That near-free
+scaling has a limit, and finding it is the next section.
 
 The takeaway I keep: the right admission policy is a property of the runtime
 beneath, not a global default. (MLX *needs* the gate — concurrent native calls

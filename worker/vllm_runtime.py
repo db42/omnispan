@@ -178,13 +178,30 @@ class VllmWorkerRuntime(WorkerRuntime):
         if metrics is None:
             return 0.0, 0.0
 
+        # vLLM V1 (>=0.26) renamed these: RequestStateStats exposes *_ts
+        # timestamps plus first_token_latency, where V0's RequestMetrics used
+        # first_token_time / first_scheduled_time / finished_time. Support both
+        # so this does not silently read 0.0 after a vLLM upgrade.
         first_token = getattr(metrics, "first_token_time", None)
+        if first_token is None:
+            first_token = getattr(metrics, "first_token_ts", None)
         finished = getattr(metrics, "finished_time", None)
+        if finished is None:
+            finished = getattr(metrics, "last_token_ts", None)
         first_scheduled = getattr(metrics, "first_scheduled_time", None)
+        if first_scheduled is None:
+            first_scheduled = getattr(metrics, "scheduled_ts", None)
         arrival = getattr(metrics, "arrival_time", None)
 
-        start = first_scheduled if first_scheduled is not None else arrival
-        ttft_ms = (first_token - start) * 1000 if (first_token is not None and start is not None) else 0.0
+        # V1 reports TTFT directly; prefer it over deriving from timestamps.
+        ttft_ms = 0.0
+        first_token_latency = getattr(metrics, "first_token_latency", None)
+        if first_token_latency is not None:
+            ttft_ms = first_token_latency * 1000
+        else:
+            start = first_scheduled if first_scheduled is not None else arrival
+            if first_token is not None and start is not None:
+                ttft_ms = (first_token - start) * 1000
 
         tpot_ms = 0.0
         if first_token is not None and finished is not None and output_tokens > 1:

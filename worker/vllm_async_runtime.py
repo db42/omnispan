@@ -53,8 +53,6 @@ class VllmAsyncWorkerRuntime(WorkerRuntime):
             "gpu_memory_utilization": self.gpu_memory_utilization,
             "trust_remote_code": self.trust_remote_code,
             "enable_prefix_caching": self.enable_prefix_caching,
-            # Keep vLLM from logging every request; the worker does its own.
-            "disable_log_requests": True,
         }
         if self.max_model_len is not None:
             engine_kwargs["max_model_len"] = self.max_model_len

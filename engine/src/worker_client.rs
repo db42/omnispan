@@ -4,9 +4,12 @@ use tokio::time::timeout;
 use tonic::transport::Channel;
 use tonic::Status;
 
+use tonic::Streaming;
+
 use crate::omnispan::worker_client::WorkerClient;
 use crate::omnispan::{
-    WorkerBatchGenerateReply, WorkerBatchGenerateRequest, WorkerGenerateReply, WorkerGenerateRequest,
+    WorkerBatchGenerateReply, WorkerBatchGenerateRequest, WorkerChunk, WorkerGenerateReply,
+    WorkerGenerateRequest,
 };
 
 #[derive(Clone)]
@@ -48,6 +51,30 @@ impl DirectWorkerClient {
                     self.timeout.as_millis()
                 ))
             })??;
+        Ok(response.into_inner())
+    }
+
+    pub async fn generate_stream(
+        &self,
+        request: WorkerGenerateRequest,
+    ) -> Result<Streaming<WorkerChunk>, Status> {
+        // Only the connect is bounded by the RPC timeout; the stream itself is
+        // long-lived (it lasts the whole decode), so we must not wrap it in the
+        // unary timeout or long generations would be cancelled mid-decode.
+        let mut client = timeout(
+            self.timeout,
+            WorkerClient::<Channel>::connect(self.endpoint.clone()),
+        )
+        .await
+        .map_err(|_| {
+            Status::deadline_exceeded(format!(
+                "worker connect timed out after {} ms",
+                self.timeout.as_millis()
+            ))
+        })?
+        .map_err(|error| Status::unavailable(format!("worker connect failed: {error}")))?;
+
+        let response = client.generate_stream(request).await?;
         Ok(response.into_inner())
     }
 

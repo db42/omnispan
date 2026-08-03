@@ -1,16 +1,21 @@
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{Stream, StreamExt};
 use tonic::{Request, Response, Status};
 
 use crate::omnispan::engine_server::Engine;
 use crate::omnispan::{
-    GenerateReply, GenerateRequest, StatsReply, StatsRequest, WorkerGenerateReply,
+    GenerateChunk, GenerateReply, GenerateRequest, StatsReply, StatsRequest, WorkerGenerateReply,
     WorkerGenerateRequest,
 };
 use crate::queue::QueuedRequest;
 use crate::worker_client::DirectWorkerClient;
+
+type GenerateChunkStream = Pin<Box<dyn Stream<Item = Result<GenerateChunk, Status>> + Send>>;
 
 #[derive(Debug, Default)]
 pub struct EngineState {
@@ -25,6 +30,9 @@ pub struct EngineService {
     pub(crate) state: Arc<Mutex<EngineState>>,
     worker_client: DirectWorkerClient,
     queue_tx: Option<mpsc::Sender<QueuedRequest>>,
+    // Serializes streaming requests against the single worker in queued mode
+    // (None in direct mode, where concurrency is the caller's responsibility).
+    stream_gate: Option<Arc<Semaphore>>,
 }
 
 impl EngineService {
@@ -33,12 +41,21 @@ impl EngineService {
         worker_client: DirectWorkerClient,
         queue_tx: Option<mpsc::Sender<QueuedRequest>>,
     ) -> Self {
+        // Streaming does not flow through the micro-batch scheduler, so in
+        // queued mode we serialize streaming requests with a 1-permit gate to
+        // preserve one-request-at-a-time worker access.
+        let stream_gate = if mode == "queued" {
+            Some(Arc::new(Semaphore::new(1)))
+        } else {
+            None
+        };
         Self {
             mode,
             started_at: Instant::now(),
             state: Arc::new(Mutex::new(EngineState::default())),
             worker_client,
             queue_tx,
+            stream_gate,
         }
     }
 
@@ -124,6 +141,158 @@ impl Engine for EngineService {
                 self.mode
             ))),
         }
+    }
+
+    type SubmitGenerateStreamStream = GenerateChunkStream;
+
+    async fn submit_generate_stream(
+        &self,
+        request: Request<GenerateRequest>,
+    ) -> Result<Response<Self::SubmitGenerateStreamStream>, Status> {
+        let received_at = Instant::now();
+        let mut inner = request.into_inner();
+        if inner.prompt.trim().is_empty() {
+            return Err(Status::invalid_argument("prompt must be non-empty"));
+        }
+        if inner.request_id.trim().is_empty() {
+            inner.request_id = new_request_id();
+        }
+        if self.mode == "micro_batch" {
+            return Err(Status::unimplemented(
+                "streaming is not supported in micro_batch mode; use direct or queued",
+            ));
+        }
+
+        {
+            let mut state = self.state.lock().await;
+            state.accepted_requests += 1;
+        }
+
+        let (tx, rx) = mpsc::channel::<Result<GenerateChunk, Status>>(64);
+        let worker = self.worker_client.clone();
+        let gate = self.stream_gate.clone();
+        let request_id = inner.request_id;
+        let tenant_id = inner.tenant_id;
+        let prompt = inner.prompt;
+        let max_tokens = inner.max_tokens;
+
+        let state = Arc::clone(&self.state);
+        tokio::spawn(async move {
+            // A stream waiting on the gate is real backlog, so it counts toward
+            // queue_depth just like a queued unary request.
+            if gate.is_some() {
+                let mut guard = state.lock().await;
+                guard.queue_depth += 1;
+            }
+            // In queued mode this blocks until the single worker is free.
+            let _permit = match &gate {
+                Some(semaphore) => Some(semaphore.acquire().await.expect("stream gate closed")),
+                None => None,
+            };
+            if gate.is_some() {
+                let mut guard = state.lock().await;
+                guard.queue_depth = guard.queue_depth.saturating_sub(1);
+            }
+            // Gate wait is the streaming analogue of queue wait: time from
+            // intake to dispatch. Measured explicitly so it is not left hiding
+            // inside the client-observed TTFT.
+            let gate_wait_ms = received_at.elapsed().as_secs_f64() * 1000.0;
+            let scheduled_at = Instant::now();
+
+            let worker_request = WorkerGenerateRequest {
+                request_id: request_id.clone(),
+                tenant_id: tenant_id.clone(),
+                prompt,
+                max_tokens,
+                submitted_at_ms: now_unix_ms(),
+            };
+
+            match worker.generate_stream(worker_request).await {
+                Ok(mut stream) => {
+                    let mut engine_ttft_ms = 0.0;
+                    let mut seen_token = false;
+                    while let Some(item) = stream.next().await {
+                        match item {
+                            Ok(chunk) if !chunk.finished => {
+                                if !seen_token {
+                                    // Engine-observed TTFT: time from dispatch to
+                                    // the first token forwarded onward.
+                                    engine_ttft_ms = scheduled_at.elapsed().as_secs_f64() * 1000.0;
+                                    seen_token = true;
+                                }
+                                let forward = GenerateChunk {
+                                    request_id: request_id.clone(),
+                                    tenant_id: tenant_id.clone(),
+                                    text_delta: chunk.text_delta,
+                                    token_index: chunk.token_index,
+                                    finished: false,
+                                    ..Default::default()
+                                };
+                                if tx.send(Ok(forward)).await.is_err() {
+                                    // Client hung up: stop draining the worker so
+                                    // it can abandon the decode instead of
+                                    // generating tokens nobody will read.
+                                    break;
+                                }
+                            }
+                            Ok(chunk) => {
+                                let is_ok = chunk.status == "ok" && chunk.error_message.is_empty();
+                                let final_chunk = GenerateChunk {
+                                    request_id: request_id.clone(),
+                                    tenant_id: tenant_id.clone(),
+                                    finished: true,
+                                    input_tokens: chunk.input_tokens,
+                                    output_tokens: chunk.output_tokens,
+                                    worker_latency_ms: chunk.worker_latency_ms,
+                                    end_to_end_latency_ms: received_at.elapsed().as_secs_f64()
+                                        * 1000.0,
+                                    ttft_ms: chunk.ttft_ms,
+                                    tpot_ms: chunk.tpot_ms,
+                                    engine_ttft_ms,
+                                    gate_wait_ms,
+                                    status: if is_ok {
+                                        "ok".to_string()
+                                    } else {
+                                        "worker_runtime_error".to_string()
+                                    },
+                                    error_message: chunk.error_message,
+                                    ..Default::default()
+                                };
+                                let _ = tx.send(Ok(final_chunk)).await;
+                                break;
+                            }
+                            Err(status) => {
+                                let _ = tx
+                                    .send(Ok(stream_error_chunk(
+                                        &request_id,
+                                        &tenant_id,
+                                        &status,
+                                        received_at,
+                                        engine_ttft_ms,
+                                        gate_wait_ms,
+                                    )))
+                                    .await;
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(status) => {
+                    let _ = tx
+                        .send(Ok(stream_error_chunk(
+                            &request_id,
+                            &tenant_id,
+                            &status,
+                            received_at,
+                            0.0,
+                            gate_wait_ms,
+                        )))
+                        .await;
+                }
+            }
+        });
+
+        Ok(Response::new(Box::pin(ReceiverStream::new(rx))))
     }
 
     async fn get_engine_stats(
@@ -212,6 +381,8 @@ pub fn build_generate_reply(
         output_tokens: worker_reply.output_tokens,
         worker_latency_ms: worker_reply.worker_latency_ms,
         end_to_end_latency_ms: received_at.elapsed().as_secs_f64() * 1000.0,
+        ttft_ms: worker_reply.ttft_ms,
+        tpot_ms: worker_reply.tpot_ms,
         status: if queue_wait_ms > 0.0 {
             format!("{normalized_status} queue_wait_ms={queue_wait_ms:.2}")
         } else {
@@ -243,12 +414,35 @@ pub fn build_transport_error_reply(
         output_tokens: 0,
         worker_latency_ms: 0.0,
         end_to_end_latency_ms: received_at.elapsed().as_secs_f64() * 1000.0,
+        ttft_ms: 0.0,
+        tpot_ms: 0.0,
         status: if queue_wait_ms > 0.0 {
             format!("{status_prefix} queue_wait_ms={queue_wait_ms:.2}")
         } else {
             status_prefix.to_string()
         },
         error_message: error.to_string(),
+    }
+}
+
+fn stream_error_chunk(
+    request_id: &str,
+    tenant_id: &str,
+    error: &Status,
+    received_at: Instant,
+    engine_ttft_ms: f64,
+    gate_wait_ms: f64,
+) -> GenerateChunk {
+    GenerateChunk {
+        request_id: request_id.to_string(),
+        tenant_id: tenant_id.to_string(),
+        finished: true,
+        end_to_end_latency_ms: received_at.elapsed().as_secs_f64() * 1000.0,
+        engine_ttft_ms,
+        gate_wait_ms,
+        status: classify_transport_error(error).to_string(),
+        error_message: error.to_string(),
+        ..Default::default()
     }
 }
 

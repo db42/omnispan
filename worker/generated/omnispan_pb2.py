@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0eomnispan.proto\x12\x08omnispan\"\\\n\x0fGenerateRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x11\n\ttenant_id\x18\x02 \x01(\t\x12\x0e\n\x06prompt\x18\x03 \x01(\t\x12\x12\n\nmax_tokens\x18\x04 \x01(\r\"\xdb\x01\n\rGenerateReply\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x11\n\ttenant_id\x18\x02 \x01(\t\x12\x15\n\rresponse_text\x18\x03 \x01(\t\x12\x14\n\x0cinput_tokens\x18\x04 \x01(\r\x12\x15\n\routput_tokens\x18\x05 \x01(\r\x12\x19\n\x11worker_latency_ms\x18\x06 \x01(\x01\x12\x1d\n\x15\x65nd_to_end_latency_ms\x18\x07 \x01(\x01\x12\x0e\n\x06status\x18\x08 \x01(\t\x12\x15\n\rerror_message\x18\t \x01(\t\"{\n\x15WorkerGenerateRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x11\n\ttenant_id\x18\x02 \x01(\t\x12\x0e\n\x06prompt\x18\x03 \x01(\t\x12\x12\n\nmax_tokens\x18\x04 \x01(\r\x12\x17\n\x0fsubmitted_at_ms\x18\x05 \x01(\x04\"\xc2\x01\n\x13WorkerGenerateReply\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x11\n\ttenant_id\x18\x02 \x01(\t\x12\x15\n\rresponse_text\x18\x03 \x01(\t\x12\x14\n\x0cinput_tokens\x18\x04 \x01(\r\x12\x15\n\routput_tokens\x18\x05 \x01(\r\x12\x19\n\x11worker_latency_ms\x18\x06 \x01(\x01\x12\x0e\n\x06status\x18\x07 \x01(\t\x12\x15\n\rerror_message\x18\x08 \x01(\t\"O\n\x1aWorkerBatchGenerateRequest\x12\x31\n\x08requests\x18\x01 \x03(\x0b\x32\x1f.omnispan.WorkerGenerateRequest\"f\n\x18WorkerBatchGenerateReply\x12\x30\n\tresponses\x18\x01 \x03(\x0b\x32\x1d.omnispan.WorkerGenerateReply\x12\x18\n\x10\x62\x61tch_latency_ms\x18\x02 \x01(\x01\"\x0e\n\x0cStatsRequest\"b\n\nStatsReply\x12\x16\n\x0euptime_seconds\x18\x01 \x01(\x04\x12\x19\n\x11\x61\x63\x63\x65pted_requests\x18\x02 \x01(\x04\x12\x13\n\x0bqueue_depth\x18\x03 \x01(\x04\x12\x0c\n\x04mode\x18\x04 \x01(\t2\x8e\x01\n\x06\x45ngine\x12\x44\n\x0eSubmitGenerate\x12\x19.omnispan.GenerateRequest\x1a\x17.omnispan.GenerateReply\x12>\n\x0eGetEngineStats\x12\x16.omnispan.StatsRequest\x1a\x14.omnispan.StatsReply2\xaf\x01\n\x06Worker\x12J\n\x08Generate\x12\x1f.omnispan.WorkerGenerateRequest\x1a\x1d.omnispan.WorkerGenerateReply\x12Y\n\rGenerateBatch\x12$.omnispan.WorkerBatchGenerateRequest\x1a\".omnispan.WorkerBatchGenerateReplyb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0eomnispan.proto\x12\x08omnispan\"\\\n\x0fGenerateRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x11\n\ttenant_id\x18\x02 \x01(\t\x12\x0e\n\x06prompt\x18\x03 \x01(\t\x12\x12\n\nmax_tokens\x18\x04 \x01(\r\"\xfd\x01\n\rGenerateReply\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x11\n\ttenant_id\x18\x02 \x01(\t\x12\x15\n\rresponse_text\x18\x03 \x01(\t\x12\x14\n\x0cinput_tokens\x18\x04 \x01(\r\x12\x15\n\routput_tokens\x18\x05 \x01(\r\x12\x19\n\x11worker_latency_ms\x18\x06 \x01(\x01\x12\x1d\n\x15\x65nd_to_end_latency_ms\x18\x07 \x01(\x01\x12\x0e\n\x06status\x18\x08 \x01(\t\x12\x15\n\rerror_message\x18\t \x01(\t\x12\x0f\n\x07ttft_ms\x18\n \x01(\x01\x12\x0f\n\x07tpot_ms\x18\x0b \x01(\x01\"{\n\x15WorkerGenerateRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x11\n\ttenant_id\x18\x02 \x01(\t\x12\x0e\n\x06prompt\x18\x03 \x01(\t\x12\x12\n\nmax_tokens\x18\x04 \x01(\r\x12\x17\n\x0fsubmitted_at_ms\x18\x05 \x01(\x04\"\xe4\x01\n\x13WorkerGenerateReply\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x11\n\ttenant_id\x18\x02 \x01(\t\x12\x15\n\rresponse_text\x18\x03 \x01(\t\x12\x14\n\x0cinput_tokens\x18\x04 \x01(\r\x12\x15\n\routput_tokens\x18\x05 \x01(\r\x12\x19\n\x11worker_latency_ms\x18\x06 \x01(\x01\x12\x0e\n\x06status\x18\x07 \x01(\t\x12\x15\n\rerror_message\x18\x08 \x01(\t\x12\x0f\n\x07ttft_ms\x18\t \x01(\x01\x12\x0f\n\x07tpot_ms\x18\n \x01(\x01\"\xed\x01\n\x0bWorkerChunk\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x12\n\ntext_delta\x18\x02 \x01(\t\x12\x13\n\x0btoken_index\x18\x03 \x01(\r\x12\x10\n\x08\x66inished\x18\x04 \x01(\x08\x12\x14\n\x0cinput_tokens\x18\x05 \x01(\r\x12\x15\n\routput_tokens\x18\x06 \x01(\r\x12\x19\n\x11worker_latency_ms\x18\x07 \x01(\x01\x12\x0f\n\x07ttft_ms\x18\x08 \x01(\x01\x12\x0f\n\x07tpot_ms\x18\t \x01(\x01\x12\x0e\n\x06status\x18\n \x01(\t\x12\x15\n\rerror_message\x18\x0b \x01(\t\"\xcf\x02\n\rGenerateChunk\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x11\n\ttenant_id\x18\x02 \x01(\t\x12\x12\n\ntext_delta\x18\x03 \x01(\t\x12\x13\n\x0btoken_index\x18\x04 \x01(\r\x12\x10\n\x08\x66inished\x18\x05 \x01(\x08\x12\x14\n\x0cinput_tokens\x18\x06 \x01(\r\x12\x15\n\routput_tokens\x18\x07 \x01(\r\x12\x19\n\x11worker_latency_ms\x18\x08 \x01(\x01\x12\x1d\n\x15\x65nd_to_end_latency_ms\x18\t \x01(\x01\x12\x0f\n\x07ttft_ms\x18\n \x01(\x01\x12\x0f\n\x07tpot_ms\x18\x0b \x01(\x01\x12\x16\n\x0e\x65ngine_ttft_ms\x18\x0c \x01(\x01\x12\x0e\n\x06status\x18\r \x01(\t\x12\x15\n\rerror_message\x18\x0e \x01(\t\x12\x14\n\x0cgate_wait_ms\x18\x0f \x01(\x01\"O\n\x1aWorkerBatchGenerateRequest\x12\x31\n\x08requests\x18\x01 \x03(\x0b\x32\x1f.omnispan.WorkerGenerateRequest\"f\n\x18WorkerBatchGenerateReply\x12\x30\n\tresponses\x18\x01 \x03(\x0b\x32\x1d.omnispan.WorkerGenerateReply\x12\x18\n\x10\x62\x61tch_latency_ms\x18\x02 \x01(\x01\"\x0e\n\x0cStatsRequest\"b\n\nStatsReply\x12\x16\n\x0euptime_seconds\x18\x01 \x01(\x04\x12\x19\n\x11\x61\x63\x63\x65pted_requests\x18\x02 \x01(\x04\x12\x13\n\x0bqueue_depth\x18\x03 \x01(\x04\x12\x0c\n\x04mode\x18\x04 \x01(\t2\xdc\x01\n\x06\x45ngine\x12\x44\n\x0eSubmitGenerate\x12\x19.omnispan.GenerateRequest\x1a\x17.omnispan.GenerateReply\x12L\n\x14SubmitGenerateStream\x12\x19.omnispan.GenerateRequest\x1a\x17.omnispan.GenerateChunk0\x01\x12>\n\x0eGetEngineStats\x12\x16.omnispan.StatsRequest\x1a\x14.omnispan.StatsReply2\xfb\x01\n\x06Worker\x12J\n\x08Generate\x12\x1f.omnispan.WorkerGenerateRequest\x1a\x1d.omnispan.WorkerGenerateReply\x12Y\n\rGenerateBatch\x12$.omnispan.WorkerBatchGenerateRequest\x1a\".omnispan.WorkerBatchGenerateReply\x12J\n\x0eGenerateStream\x12\x1f.omnispan.WorkerGenerateRequest\x1a\x15.omnispan.WorkerChunk0\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,21 +34,25 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_GENERATEREQUEST']._serialized_start=28
   _globals['_GENERATEREQUEST']._serialized_end=120
   _globals['_GENERATEREPLY']._serialized_start=123
-  _globals['_GENERATEREPLY']._serialized_end=342
-  _globals['_WORKERGENERATEREQUEST']._serialized_start=344
-  _globals['_WORKERGENERATEREQUEST']._serialized_end=467
-  _globals['_WORKERGENERATEREPLY']._serialized_start=470
-  _globals['_WORKERGENERATEREPLY']._serialized_end=664
-  _globals['_WORKERBATCHGENERATEREQUEST']._serialized_start=666
-  _globals['_WORKERBATCHGENERATEREQUEST']._serialized_end=745
-  _globals['_WORKERBATCHGENERATEREPLY']._serialized_start=747
-  _globals['_WORKERBATCHGENERATEREPLY']._serialized_end=849
-  _globals['_STATSREQUEST']._serialized_start=851
-  _globals['_STATSREQUEST']._serialized_end=865
-  _globals['_STATSREPLY']._serialized_start=867
-  _globals['_STATSREPLY']._serialized_end=965
-  _globals['_ENGINE']._serialized_start=968
-  _globals['_ENGINE']._serialized_end=1110
-  _globals['_WORKER']._serialized_start=1113
-  _globals['_WORKER']._serialized_end=1288
+  _globals['_GENERATEREPLY']._serialized_end=376
+  _globals['_WORKERGENERATEREQUEST']._serialized_start=378
+  _globals['_WORKERGENERATEREQUEST']._serialized_end=501
+  _globals['_WORKERGENERATEREPLY']._serialized_start=504
+  _globals['_WORKERGENERATEREPLY']._serialized_end=732
+  _globals['_WORKERCHUNK']._serialized_start=735
+  _globals['_WORKERCHUNK']._serialized_end=972
+  _globals['_GENERATECHUNK']._serialized_start=975
+  _globals['_GENERATECHUNK']._serialized_end=1310
+  _globals['_WORKERBATCHGENERATEREQUEST']._serialized_start=1312
+  _globals['_WORKERBATCHGENERATEREQUEST']._serialized_end=1391
+  _globals['_WORKERBATCHGENERATEREPLY']._serialized_start=1393
+  _globals['_WORKERBATCHGENERATEREPLY']._serialized_end=1495
+  _globals['_STATSREQUEST']._serialized_start=1497
+  _globals['_STATSREQUEST']._serialized_end=1511
+  _globals['_STATSREPLY']._serialized_start=1513
+  _globals['_STATSREPLY']._serialized_end=1611
+  _globals['_ENGINE']._serialized_start=1614
+  _globals['_ENGINE']._serialized_end=1834
+  _globals['_WORKER']._serialized_start=1837
+  _globals['_WORKER']._serialized_end=2088
 # @@protoc_insertion_point(module_scope)

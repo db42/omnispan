@@ -22,18 +22,58 @@ class WorkerService(omnispan_pb2_grpc.WorkerServicer):
     def __init__(self, runtime):
         self.runtime = runtime
 
+    def _stream_event_to_chunk(self, request_id, event):
+        """Map a runtime stream event (token/final/error dict) to a WorkerChunk.
+
+        Shared by the sync (thread-bridged) and async streaming paths so both
+        wire formats stay identical.
+        """
+        if event["type"] == "token":
+            return omnispan_pb2.WorkerChunk(
+                request_id=request_id,
+                text_delta=event["text_delta"],
+                token_index=event["token_index"],
+                finished=False,
+            )
+        if event["type"] == "final":
+            return omnispan_pb2.WorkerChunk(
+                request_id=request_id,
+                finished=True,
+                input_tokens=event["input_tokens"],
+                output_tokens=event["output_tokens"],
+                worker_latency_ms=event["worker_latency_ms"],
+                ttft_ms=event["ttft_ms"],
+                tpot_ms=event["tpot_ms"],
+                status="ok",
+                error_message="",
+            )
+        return omnispan_pb2.WorkerChunk(
+            request_id=request_id,
+            finished=True,
+            status="error",
+            error_message=event["message"],
+        )
+
     async def Generate(self, request, context):
         if not request.prompt.strip():
             await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "prompt must be non-empty")
 
         try:
-            result = await asyncio.to_thread(
-                self.runtime.generate,
-                request.request_id,
-                request.tenant_id,
-                request.prompt,
-                request.max_tokens,
-            )
+            if self.runtime.is_async:
+                result = await self.runtime.agenerate(
+                    request.request_id,
+                    request.tenant_id,
+                    request.prompt,
+                    request.max_tokens,
+                )
+            else:
+                result = await asyncio.to_thread(
+                    self.runtime.generate,
+                    request.request_id,
+                    request.tenant_id,
+                    request.prompt,
+                    request.max_tokens,
+                )
         except Exception as error:  # noqa: BLE001
             logging.exception("worker generate failed")
             return omnispan_pb2.WorkerGenerateReply(
@@ -50,9 +90,72 @@ class WorkerService(omnispan_pb2_grpc.WorkerServicer):
             input_tokens=result["input_tokens"],
             output_tokens=result["output_tokens"],
             worker_latency_ms=result["worker_latency_ms"],
+            ttft_ms=result.get("ttft_ms", 0.0),
+            tpot_ms=result.get("tpot_ms", 0.0),
             status="ok",
             error_message="",
         )
+
+    async def GenerateStream(self, request, context):
+        if not request.prompt.strip():
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "prompt must be non-empty")
+
+        # Async-native runtimes (vLLM AsyncLLMEngine) stream directly on the
+        # event loop; sync runtimes (MLX) run their blocking decode loop in a
+        # thread and hand events back over a queue.
+        if self.runtime.is_async:
+            try:
+                async for event in self.runtime.agenerate_stream(
+                    request.request_id,
+                    request.tenant_id,
+                    request.prompt,
+                    request.max_tokens,
+                ):
+                    yield self._stream_event_to_chunk(request.request_id, event)
+            except NotImplementedError as error:
+                yield self._stream_event_to_chunk(
+                    request.request_id, {"type": "error", "message": str(error)}
+                )
+            except Exception as error:  # noqa: BLE001
+                logging.exception("worker async stream generate failed")
+                yield self._stream_event_to_chunk(
+                    request.request_id, {"type": "error", "message": str(error)}
+                )
+            return
+
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        _DONE = object()
+
+        def produce() -> None:
+            # Runs the blocking MLX decode loop off the event-loop thread and
+            # hands each event back to the async side via the queue.
+            try:
+                for event in self.runtime.generate_stream(
+                    request.request_id,
+                    request.tenant_id,
+                    request.prompt,
+                    request.max_tokens,
+                ):
+                    loop.call_soon_threadsafe(queue.put_nowait, event)
+            except NotImplementedError as error:
+                loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(error), "code": "unimplemented"})
+            except Exception as error:  # noqa: BLE001
+                logging.exception("worker stream generate failed")
+                loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(error), "code": "internal"})
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+
+        producer = loop.run_in_executor(None, produce)
+
+        try:
+            while True:
+                event = await queue.get()
+                if event is _DONE:
+                    break
+                yield self._stream_event_to_chunk(request.request_id, event)
+        finally:
+            await producer
 
     async def GenerateBatch(self, request, context):
         if len(request.requests) == 0:
@@ -72,7 +175,10 @@ class WorkerService(omnispan_pb2_grpc.WorkerServicer):
             )
 
         try:
-            result = await asyncio.to_thread(self.runtime.generate_batch, payloads)
+            if self.runtime.is_async:
+                result = await self.runtime.agenerate_batch(payloads)
+            else:
+                result = await asyncio.to_thread(self.runtime.generate_batch, payloads)
         except Exception as error:  # noqa: BLE001
             logging.exception("worker batch generate failed")
             return omnispan_pb2.WorkerBatchGenerateReply(
@@ -97,6 +203,8 @@ class WorkerService(omnispan_pb2_grpc.WorkerServicer):
                     input_tokens=item["input_tokens"],
                     output_tokens=item["output_tokens"],
                     worker_latency_ms=result["batch_latency_ms"],
+                    ttft_ms=item.get("ttft_ms", 0.0),
+                    tpot_ms=item.get("tpot_ms", 0.0),
                     status="ok",
                     error_message="",
                 )

@@ -39,6 +39,11 @@ class EngineStub(object):
                 request_serializer=omnispan__pb2.GenerateRequest.SerializeToString,
                 response_deserializer=omnispan__pb2.GenerateReply.FromString,
                 _registered_method=True)
+        self.SubmitGenerateStream = channel.unary_stream(
+                '/omnispan.Engine/SubmitGenerateStream',
+                request_serializer=omnispan__pb2.GenerateRequest.SerializeToString,
+                response_deserializer=omnispan__pb2.GenerateChunk.FromString,
+                _registered_method=True)
         self.GetEngineStats = channel.unary_unary(
                 '/omnispan.Engine/GetEngineStats',
                 request_serializer=omnispan__pb2.StatsRequest.SerializeToString,
@@ -51,6 +56,14 @@ class EngineServicer(object):
 
     def SubmitGenerate(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SubmitGenerateStream(self, request, context):
+        """Server-streaming variant: emits one chunk per output token, then a final
+        summary chunk. Lets the client observe true time-to-first-token.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -68,6 +81,11 @@ def add_EngineServicer_to_server(servicer, server):
                     servicer.SubmitGenerate,
                     request_deserializer=omnispan__pb2.GenerateRequest.FromString,
                     response_serializer=omnispan__pb2.GenerateReply.SerializeToString,
+            ),
+            'SubmitGenerateStream': grpc.unary_stream_rpc_method_handler(
+                    servicer.SubmitGenerateStream,
+                    request_deserializer=omnispan__pb2.GenerateRequest.FromString,
+                    response_serializer=omnispan__pb2.GenerateChunk.SerializeToString,
             ),
             'GetEngineStats': grpc.unary_unary_rpc_method_handler(
                     servicer.GetEngineStats,
@@ -102,6 +120,33 @@ class Engine(object):
             '/omnispan.Engine/SubmitGenerate',
             omnispan__pb2.GenerateRequest.SerializeToString,
             omnispan__pb2.GenerateReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SubmitGenerateStream(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/omnispan.Engine/SubmitGenerateStream',
+            omnispan__pb2.GenerateRequest.SerializeToString,
+            omnispan__pb2.GenerateChunk.FromString,
             options,
             channel_credentials,
             insecure,
@@ -159,6 +204,11 @@ class WorkerStub(object):
                 request_serializer=omnispan__pb2.WorkerBatchGenerateRequest.SerializeToString,
                 response_deserializer=omnispan__pb2.WorkerBatchGenerateReply.FromString,
                 _registered_method=True)
+        self.GenerateStream = channel.unary_stream(
+                '/omnispan.Worker/GenerateStream',
+                request_serializer=omnispan__pb2.WorkerGenerateRequest.SerializeToString,
+                response_deserializer=omnispan__pb2.WorkerChunk.FromString,
+                _registered_method=True)
 
 
 class WorkerServicer(object):
@@ -176,6 +226,12 @@ class WorkerServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GenerateStream(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_WorkerServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -188,6 +244,11 @@ def add_WorkerServicer_to_server(servicer, server):
                     servicer.GenerateBatch,
                     request_deserializer=omnispan__pb2.WorkerBatchGenerateRequest.FromString,
                     response_serializer=omnispan__pb2.WorkerBatchGenerateReply.SerializeToString,
+            ),
+            'GenerateStream': grpc.unary_stream_rpc_method_handler(
+                    servicer.GenerateStream,
+                    request_deserializer=omnispan__pb2.WorkerGenerateRequest.FromString,
+                    response_serializer=omnispan__pb2.WorkerChunk.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -244,6 +305,33 @@ class Worker(object):
             '/omnispan.Worker/GenerateBatch',
             omnispan__pb2.WorkerBatchGenerateRequest.SerializeToString,
             omnispan__pb2.WorkerBatchGenerateReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GenerateStream(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/omnispan.Worker/GenerateStream',
+            omnispan__pb2.WorkerGenerateRequest.SerializeToString,
+            omnispan__pb2.WorkerChunk.FromString,
             options,
             channel_credentials,
             insecure,

@@ -3,12 +3,16 @@ package omnispan;
 
 service Engine {
     rpc SubmitGenerate(GenerateRequest) returns (GenerateReply);
+    // Server-streaming variant: emits one chunk per output token, then a final
+    // summary chunk. Lets the client observe true time-to-first-token.
+    rpc SubmitGenerateStream(GenerateRequest) returns (stream GenerateChunk);
     rpc GetEngineStats(StatsRequest) returns (StatsReply);
 }
 
 service Worker {
     rpc Generate(WorkerGenerateRequest) returns (WorkerGenerateReply);
     rpc GenerateBatch(WorkerBatchGenerateRequest) returns (WorkerBatchGenerateReply);
+    rpc GenerateStream(WorkerGenerateRequest) returns (stream WorkerChunk);
 }
 
 message GenerateRequest {
@@ -28,6 +32,10 @@ message GenerateReply {
     double end_to_end_latency_ms = 7;
     string status = 8;
     string error_message = 9;
+    // Time to first output token, measured inside the worker runtime (ms).
+    double ttft_ms = 10;
+    // Time per output token during decode: mean inter-token latency (ms).
+    double tpot_ms = 11;
 }
 
 message WorkerGenerateRequest {
@@ -47,6 +55,52 @@ message WorkerGenerateReply {
     double worker_latency_ms = 6;
     string status = 7;
     string error_message = 8;
+    // Time to first output token (ms). 0 when not measured (e.g. batch path).
+    double ttft_ms = 9;
+    // Time per output token: mean inter-token latency during decode (ms).
+    double tpot_ms = 10;
+}
+
+// One streamed unit from the worker: either an incremental token
+// (finished=false) or the terminal summary (finished=true), where the
+// aggregate metric fields are populated.
+message WorkerChunk {
+    string request_id = 1;
+    string text_delta = 2;
+    uint32 token_index = 3;
+    bool finished = 4;
+    // Populated on the final chunk only (finished=true):
+    uint32 input_tokens = 5;
+    uint32 output_tokens = 6;
+    double worker_latency_ms = 7;
+    double ttft_ms = 8;
+    double tpot_ms = 9;
+    string status = 10;
+    string error_message = 11;
+}
+
+// One streamed unit from the engine to the client. Mirrors WorkerChunk and
+// adds the engine-observed time to first forwarded chunk, so the client can
+// compare worker-side, engine-side, and its own client-observed TTFT.
+message GenerateChunk {
+    string request_id = 1;
+    string tenant_id = 2;
+    string text_delta = 3;
+    uint32 token_index = 4;
+    bool finished = 5;
+    // Populated on the final chunk only (finished=true):
+    uint32 input_tokens = 6;
+    uint32 output_tokens = 7;
+    double worker_latency_ms = 8;
+    double end_to_end_latency_ms = 9;
+    double ttft_ms = 10;
+    double tpot_ms = 11;
+    double engine_ttft_ms = 12;
+    string status = 13;
+    string error_message = 14;
+    // Time spent waiting on the engine's stream gate before dispatch (ms).
+    // The streaming analogue of queue_wait_ms on the unary path.
+    double gate_wait_ms = 15;
 }
 
 message WorkerBatchGenerateRequest {

@@ -69,6 +69,7 @@ class VllmWorkerRuntime(WorkerRuntime):
         output = outputs[0]
         completion = self._first_completion(output)
 
+        ttft_ms, tpot_ms = self._ttft_tpot_ms(output, len(completion.token_ids))
         return {
             "request_id": request_id,
             "tenant_id": tenant_id,
@@ -76,6 +77,8 @@ class VllmWorkerRuntime(WorkerRuntime):
             "input_tokens": self._prompt_token_count(output, prompt),
             "output_tokens": len(completion.token_ids),
             "worker_latency_ms": round(self._worker_latency_ms(output), 2),
+            "ttft_ms": round(ttft_ms, 2),
+            "tpot_ms": round(tpot_ms, 2),
         }
 
     def generate_batch(self, requests: list[dict]) -> dict:
@@ -125,6 +128,7 @@ class VllmWorkerRuntime(WorkerRuntime):
                     completion_count,
                 )
             completion = self._first_completion(output)
+            ttft_ms, tpot_ms = self._ttft_tpot_ms(output, len(completion.token_ids))
             results.append(
                 {
                     "request_id": request["request_id"],
@@ -132,6 +136,8 @@ class VllmWorkerRuntime(WorkerRuntime):
                     "response_text": completion.text,
                     "input_tokens": self._prompt_token_count(output, request["prompt"]),
                     "output_tokens": len(completion.token_ids),
+                    "ttft_ms": round(ttft_ms, 2),
+                    "tpot_ms": round(tpot_ms, 2),
                 }
             )
 
@@ -164,6 +170,26 @@ class VllmWorkerRuntime(WorkerRuntime):
         if self.tokenizer is None:
             raise RuntimeError("vLLM tokenizer is not loaded")
         return len(self.tokenizer.encode(prompt))
+
+    def _ttft_tpot_ms(self, output: Any, output_tokens: int) -> tuple[float, float]:
+        # vLLM records per-request timing natively, so unlike the batched MLX
+        # path we can report true TTFT/TPOT even under continuous batching.
+        metrics = getattr(output, "metrics", None)
+        if metrics is None:
+            return 0.0, 0.0
+
+        first_token = getattr(metrics, "first_token_time", None)
+        finished = getattr(metrics, "finished_time", None)
+        first_scheduled = getattr(metrics, "first_scheduled_time", None)
+        arrival = getattr(metrics, "arrival_time", None)
+
+        start = first_scheduled if first_scheduled is not None else arrival
+        ttft_ms = (first_token - start) * 1000 if (first_token is not None and start is not None) else 0.0
+
+        tpot_ms = 0.0
+        if first_token is not None and finished is not None and output_tokens > 1:
+            tpot_ms = ((finished - first_token) * 1000) / (output_tokens - 1)
+        return ttft_ms, tpot_ms
 
     def _worker_latency_ms(self, output: Any) -> float:
         metrics = getattr(output, "metrics", None)

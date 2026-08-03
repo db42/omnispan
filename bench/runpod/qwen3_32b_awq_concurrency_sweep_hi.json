@@ -1,0 +1,88 @@
+{
+  "sweep": "max_concurrent_streams",
+  "requests": 512,
+  "client_concurrency": 256,
+  "max_tokens": 150,
+  "slo_ttft_p95_ms": 2000.0,
+  "trials": [
+    {
+      "limit": 32,
+      "label": "N=32",
+      "tokens_per_second": 860.21,
+      "wall_clock_seconds": 97.02,
+      "failed": 0,
+      "worker_ttft_p50": 295.27,
+      "client_ttft_p50": 42531.51,
+      "client_ttft_p95": 42792.27,
+      "tpot_p50": 38.66,
+      "queue_wait_p50": 42280.39,
+      "meets_ttft_slo": false
+    },
+    {
+      "limit": 64,
+      "label": "N=64",
+      "tokens_per_second": 1170.4,
+      "wall_clock_seconds": 71.31,
+      "failed": 0,
+      "worker_ttft_p50": 626.19,
+      "client_ttft_p50": 26964.42,
+      "client_ttft_p95": 27370.53,
+      "tpot_p50": 55.34,
+      "queue_wait_p50": 26620.51,
+      "meets_ttft_slo": false
+    },
+    {
+      "limit": 128,
+      "label": "N=128",
+      "tokens_per_second": 1258.58,
+      "wall_clock_seconds": 66.31,
+      "failed": 0,
+      "worker_ttft_p50": 974.13,
+      "client_ttft_p50": 17508.41,
+      "client_ttft_p95": 17786.44,
+      "tpot_p50": 103.67,
+      "queue_wait_p50": 16484.6,
+      "meets_ttft_slo": false
+    },
+    {
+      "limit": 256,
+      "label": "N=256",
+      "tokens_per_second": 1260.17,
+      "wall_clock_seconds": 66.23,
+      "failed": 0,
+      "worker_ttft_p50": 17501.32,
+      "client_ttft_p50": 17508.9,
+      "client_ttft_p95": 17753.43,
+      "tpot_p50": 103.75,
+      "queue_wait_p50": 0.05,
+      "meets_ttft_slo": false
+    },
+    {
+      "limit": 0,
+      "label": "N=unlimited",
+      "tokens_per_second": 1266.43,
+      "wall_clock_seconds": 65.9,
+      "failed": 0,
+      "worker_ttft_p50": 17082.4,
+      "client_ttft_p50": 17088.74,
+      "client_ttft_p95": 17893.06,
+      "tpot_p50": 102.04,
+      "queue_wait_p50": 0.04,
+      "meets_ttft_slo": false
+    }
+  ],
+  "best_throughput": {
+    "limit": 0,
+    "label": "N=unlimited",
+    "tokens_per_second": 1266.43,
+    "wall_clock_seconds": 65.9,
+    "failed": 0,
+    "worker_ttft_p50": 17082.4,
+    "client_ttft_p50": 17088.74,
+    "client_ttft_p95": 17893.06,
+    "tpot_p50": 102.04,
+    "queue_wait_p50": 0.04,
+    "meets_ttft_slo": false
+  },
+  "recommended_within_slo": null
+}

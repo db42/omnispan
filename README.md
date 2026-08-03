@@ -445,10 +445,23 @@ Identical load and identical worker; **only the engine's scheduling policy diffe
 | 16 | 467.5 tokens/s | 14.2× | 2.9 s | 5.8 s | 36.0 ms |
 | unlimited (= 32) | **859.9 tokens/s** | **26.2×** | **0.33 s** | **0.34 s** | 38.2 ms |
 
-- **No knee in this range — the expected tradeoff does not appear.** Throughput and latency improve *together* and near-linearly across the whole sweep (26.2× throughput at N=32, with p95 TTFT falling 146 s → 0.34 s). Admission gating is not a tuning dial here; it is pure loss.
-- **TPOT is the only thing that degrades, and barely:** 33.0 → 38.2 ms (+16%) while throughput grows 26×. Continuous batching absorbs concurrency almost for free because decode is memory-bandwidth bound at small batch sizes.
-- **The A40 was never saturated.** "Unlimited" was capped by the client's own concurrency of 32, not by the GPU. The real knee is beyond that; finding it needs a client that can drive hundreds of concurrent streams.
-- **Consequence:** with a continuous-batching runtime, the control plane should default to *not* gating, and treat an admission limit as a safety valve (protecting KV memory, enforcing tenant quotas) rather than a throughput tuning knob. The opposite is true for MLX, where the gate is mandatory.
+A second sweep at higher offered load (512 requests, client concurrency 256) extends the curve past the point where the client stopped being the bottleneck. Artifact: [`bench/runpod/qwen3_32b_awq_concurrency_sweep_hi.json`](bench/runpod/qwen3_32b_awq_concurrency_sweep_hi.json).
+
+| N | Throughput | Marginal gain | TPOT p50 |
+|---|---|---|---|
+| 32 | 860.2 tokens/s | +84% | 38.7 ms |
+| 64 | 1,170.4 tokens/s | +36% | 55.3 ms |
+| **128** | **1,258.6 tokens/s** | **+7.5%** | 103.7 ms |
+| 256 | 1,260.2 tokens/s | +0.1% | 103.8 ms |
+| unlimited | 1,266.4 tokens/s | +0.5% | 102.0 ms |
+
+*N=32 appears in both sweeps at 859.9 and 860.2 tokens/s — an independent reproducibility check on the method.*
+
+- **Throughput saturates at N≈128 (~1,260 tokens/s).** Beyond it the engine's gate is a no-op: N=256 and unlimited are identical, because vLLM's own limits (KV cache, `max_num_seqs`) bind before ours does.
+- **The real tradeoff is TPOT, not throughput.** TPOT is flat to N=32 (33 → 39 ms), then degrades sharply — 55 ms at 64, **104 ms at 128**. The last 7.5% of throughput costs a 3× regression in per-token latency.
+- **Throughput-optimal and SLO-optimal N are different numbers.** Maximizing throughput picks N=128 (1,259 tokens/s, TPOT 104 ms). A TPOT SLO of 50 ms — roughly 20 tokens/s per user, about reading speed — picks **N=32**: 860 tokens/s, 68% of peak, at usable per-user latency. Which is correct depends on whether the tier is interactive or bulk.
+- **At this offered load no N met the 2 s TTFT p95 SLO** (all ≥17 s). When an SLO is unreachable at *every* admission setting, the answer is not tuning — it is more replicas. That is the autoscaling signal, and it is the point where a single-node control plane runs out of moves.
+- **Consequence for the control plane:** treat the admission limit as a *safety valve* (KV memory, tenant quotas, TPOT protection), not a throughput dial — and prefer driving it from measured KV-cache pressure (`gpu_cache_usage_perc`) rather than a static constant, since the saturation point moves with prompt and output length. The opposite holds for MLX, where the gate is mandatory for safety.
 
 ### 5. RunPod A40 performance (vLLM, Automatic Prefix Caching)
 *Model: `Qwen/Qwen3-32B-AWQ` | Concurrency: 2 | Requests: 2 | Max Tokens: 64 | Prefix-cache workload (6× repeated policy prefix)*
@@ -487,6 +500,7 @@ in priority order:
 - Disaggregated prefill/decode workers with KV handoff (the "prefill leader / decode worker / KV router" pattern)
 - Streaming under `micro_batch` via token-level continuous batching (the reason engines like vLLM exist)
 - Priority classes in the streaming gate (online preempts batch) — see [docs/batch-tier.md](docs/batch-tier.md)
+- Adaptive admission driven by measured KV-cache pressure (`gpu_cache_usage_perc`) instead of a static limit
 
 End-to-end response streaming (`SubmitGenerateStream`) is implemented for
 `direct` and `queued` modes, with client/engine/worker TTFT decomposition. The

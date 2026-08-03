@@ -47,6 +47,10 @@ Key findings: on MLX, throughput (batching) and per-request streaming (TTFT) can
 
 Those can come later after the serving engine behavior is understood.
 
+## Related Notes
+
+- [batch-tier.md](batch-tier.md) — design note on an offline batch tier (not implemented).
+
 ## High-Level Architecture
 
 There are three conceptual layers, but only two processes in the first version.

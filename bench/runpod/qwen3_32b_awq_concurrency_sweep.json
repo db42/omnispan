@@ -1,0 +1,113 @@
+{
+  "sweep": "max_concurrent_streams",
+  "requests": 32,
+  "client_concurrency": 32,
+  "max_tokens": 150,
+  "slo_ttft_p95_ms": 2000.0,
+  "trials": [
+    {
+      "limit": 1,
+      "label": "N=1",
+      "tokens_per_second": 32.86,
+      "wall_clock_seconds": 158.72,
+      "failed": 0,
+      "worker_ttft_p50": 48.1,
+      "client_ttft_p50": 76845.07,
+      "client_ttft_p95": 146088.17,
+      "tpot_p50": 32.95,
+      "queue_wait_p50": 76793.91,
+      "meets_ttft_slo": false
+    },
+    {
+      "limit": 2,
+      "label": "N=2",
+      "tokens_per_second": 64.97,
+      "wall_clock_seconds": 80.28,
+      "failed": 0,
+      "worker_ttft_p50": 88.0,
+      "client_ttft_p50": 37682.35,
+      "client_ttft_p95": 72557.77,
+      "tpot_p50": 33.1,
+      "queue_wait_p50": 37586.59,
+      "meets_ttft_slo": false
+    },
+    {
+      "limit": 4,
+      "label": "N=4",
+      "tokens_per_second": 128.9,
+      "wall_clock_seconds": 40.47,
+      "failed": 0,
+      "worker_ttft_p50": 83.72,
+      "client_ttft_p50": 17761.04,
+      "client_ttft_p95": 35470.0,
+      "tpot_p50": 33.34,
+      "queue_wait_p50": 17684.24,
+      "meets_ttft_slo": false
+    },
+    {
+      "limit": 8,
+      "label": "N=8",
+      "tokens_per_second": 250.63,
+      "wall_clock_seconds": 20.81,
+      "failed": 0,
+      "worker_ttft_p50": 125.02,
+      "client_ttft_p50": 7895.13,
+      "client_ttft_p95": 15716.21,
+      "tpot_p50": 34.0,
+      "queue_wait_p50": 7771.42,
+      "meets_ttft_slo": false
+    },
+    {
+      "limit": 16,
+      "label": "N=16",
+      "tokens_per_second": 467.51,
+      "wall_clock_seconds": 11.16,
+      "failed": 0,
+      "worker_ttft_p50": 201.16,
+      "client_ttft_p50": 2921.23,
+      "client_ttft_p95": 5768.78,
+      "tpot_p50": 35.95,
+      "queue_wait_p50": 2759.3,
+      "meets_ttft_slo": false
+    },
+    {
+      "limit": 0,
+      "label": "N=unlimited",
+      "tokens_per_second": 859.92,
+      "wall_clock_seconds": 6.07,
+      "failed": 0,
+      "worker_ttft_p50": 329.52,
+      "client_ttft_p50": 333.77,
+      "client_ttft_p95": 342.59,
+      "tpot_p50": 38.21,
+      "queue_wait_p50": 0.03,
+      "meets_ttft_slo": true
+    }
+  ],
+  "best_throughput": {
+    "limit": 0,
+    "label": "N=unlimited",
+    "tokens_per_second": 859.92,
+    "wall_clock_seconds": 6.07,
+    "failed": 0,
+    "worker_ttft_p50": 329.52,
+    "client_ttft_p50": 333.77,
+    "client_ttft_p95": 342.59,
+    "tpot_p50": 38.21,
+    "queue_wait_p50": 0.03,
+    "meets_ttft_slo": true
+  },
+  "recommended_within_slo": {
+    "limit": 0,
+    "label": "N=unlimited",
+    "tokens_per_second": 859.92,
+    "wall_clock_seconds": 6.07,
+    "failed": 0,
+    "worker_ttft_p50": 329.52,
+    "client_ttft_p50": 333.77,
+    "client_ttft_p95": 342.59,
+    "tpot_p50": 38.21,
+    "queue_wait_p50": 0.03,
+    "meets_ttft_slo": true
+  }
+}

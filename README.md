@@ -433,7 +433,24 @@ Identical load and identical worker; **only the engine's scheduling policy diffe
 - **TPOT barely moves (32.9 → 33.9 ms) while throughput grows 7.6×.** That is continuous batching working: vLLM interleaves 8 sequences through shared decode steps, so per-token latency is nearly unchanged while aggregate output multiplies.
 - **This is the exact inverse of MLX.** MLX segfaults on concurrent `direct` calls and *needs* the engine to serialize or batch; vLLM needs the engine to get out of the way. The right control-plane policy is a property of the runtime beneath it — which is the argument for folding scheduling into the inference engine (vLLM/SGLang) rather than layering it on top.
 
-### 4. RunPod A40 performance (vLLM, Automatic Prefix Caching)
+### 4. Admission-limit sweep (vLLM, RunPod A40)
+*Model: `Qwen/Qwen3-32B-AWQ` | 32 requests at client concurrency 32 | Max Tokens: 150 | streaming. Sweeps `MAX_CONCURRENT_STREAMS`. Artifact: [`bench/runpod/qwen3_32b_awq_concurrency_sweep.json`](bench/runpod/qwen3_32b_awq_concurrency_sweep.json).*
+
+| `MAX_CONCURRENT_STREAMS` | Throughput | vs N=1 | Client TTFT p50 | Client TTFT p95 | TPOT p50 |
+|---|---|---|---|---|---|
+| 1 | 32.9 tokens/s | 1.0× | 76.8 s | 146.1 s | 33.0 ms |
+| 2 | 65.0 tokens/s | 2.0× | 37.7 s | 72.6 s | 33.1 ms |
+| 4 | 128.9 tokens/s | 3.9× | 17.8 s | 35.5 s | 33.3 ms |
+| 8 | 250.6 tokens/s | 7.6× | 7.9 s | 15.7 s | 34.0 ms |
+| 16 | 467.5 tokens/s | 14.2× | 2.9 s | 5.8 s | 36.0 ms |
+| unlimited (= 32) | **859.9 tokens/s** | **26.2×** | **0.33 s** | **0.34 s** | 38.2 ms |
+
+- **No knee in this range — the expected tradeoff does not appear.** Throughput and latency improve *together* and near-linearly across the whole sweep (26.2× throughput at N=32, with p95 TTFT falling 146 s → 0.34 s). Admission gating is not a tuning dial here; it is pure loss.
+- **TPOT is the only thing that degrades, and barely:** 33.0 → 38.2 ms (+16%) while throughput grows 26×. Continuous batching absorbs concurrency almost for free because decode is memory-bandwidth bound at small batch sizes.
+- **The A40 was never saturated.** "Unlimited" was capped by the client's own concurrency of 32, not by the GPU. The real knee is beyond that; finding it needs a client that can drive hundreds of concurrent streams.
+- **Consequence:** with a continuous-batching runtime, the control plane should default to *not* gating, and treat an admission limit as a safety valve (protecting KV memory, enforcing tenant quotas) rather than a throughput tuning knob. The opposite is true for MLX, where the gate is mandatory.
+
+### 5. RunPod A40 performance (vLLM, Automatic Prefix Caching)
 *Model: `Qwen/Qwen3-32B-AWQ` | Concurrency: 2 | Requests: 2 | Max Tokens: 64 | Prefix-cache workload (6× repeated policy prefix)*
 
 | Configuration | Wall Clock | Throughput | Worker Latency (p50) | Queue Wait (p50) | Throughput Gain |
@@ -469,6 +486,7 @@ in priority order:
 - SGLang worker backend behind the existing runtime interface
 - Disaggregated prefill/decode workers with KV handoff (the "prefill leader / decode worker / KV router" pattern)
 - Streaming under `micro_batch` via token-level continuous batching (the reason engines like vLLM exist)
+- Priority classes in the streaming gate (online preempts batch) — see [docs/batch-tier.md](docs/batch-tier.md)
 
 End-to-end response streaming (`SubmitGenerateStream`) is implemented for
 `direct` and `queued` modes, with client/engine/worker TTFT decomposition. The
